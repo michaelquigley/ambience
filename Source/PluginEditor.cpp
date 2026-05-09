@@ -12,7 +12,7 @@
 using namespace FDNReverb;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Layout constants (all explicit, no arithmetic that causes drift)
+//  Layout constants (修正済：ノブとラベルの領域を整理)
 // ─────────────────────────────────────────────────────────────────────────────
 static constexpr int W = 900;
 static constexpr int H = 540;
@@ -20,20 +20,21 @@ static constexpr int PAD = 8;
 static constexpr int HEADER_H = 32;
 static constexpr int ALGO_H = 30;
 static constexpr int SLABEL_H = 14;   // section label height
-static constexpr int KNOB_SIZE = 64;
-static constexpr int KNOB_LBL_H = 14;
-static constexpr int UNIT_H = KNOB_SIZE + KNOB_LBL_H + 2;  // 80
+static constexpr int KNOB_W = 64;     // ノブの幅
+static constexpr int KNOB_H = 72;     // ノブ + テキストボックス(数値)の高さ
+static constexpr int KNOB_LBL_H = 14; // 上部のパラメータ名ラベルの高さ
+static constexpr int UNIT_H = KNOB_LBL_H + KNOB_H + 2; // 88
 
-// Named y-positions (computed once, used in both resized() and paint())
-static constexpr int Y_HEADER = PAD;                              // 8
-static constexpr int Y_ALGO = Y_HEADER + HEADER_H + PAD;       // 48
-static constexpr int Y_SLABEL1 = Y_ALGO + ALGO_H + PAD;       // 86
-static constexpr int Y_ROW1 = Y_SLABEL1 + SLABEL_H + 4;        // 104
-static constexpr int Y_SLABEL2 = Y_ROW1 + UNIT_H + PAD;       // 192
-static constexpr int Y_ROW2 = Y_SLABEL2 + SLABEL_H + 4;        // 210
-static constexpr int Y_SEP = Y_ROW2 + UNIT_H + PAD;       // 298
-static constexpr int Y_VIZ = Y_SEP + 4;                       // 302
-static constexpr int VIZ_H = H - Y_VIZ - PAD;                 // 230
+// Named y-positions (自動計算されるためそのまま使用)
+static constexpr int Y_HEADER = PAD;                               // 8
+static constexpr int Y_ALGO = Y_HEADER + HEADER_H + PAD;           // 48
+static constexpr int Y_SLABEL1 = Y_ALGO + ALGO_H + PAD;            // 86
+static constexpr int Y_ROW1 = Y_SLABEL1 + SLABEL_H + 4;            // 104
+static constexpr int Y_SLABEL2 = Y_ROW1 + UNIT_H + PAD;            // 204
+static constexpr int Y_ROW2 = Y_SLABEL2 + SLABEL_H + 4;            // 222
+static constexpr int Y_SEP = Y_ROW2 + UNIT_H + PAD;                // 322
+static constexpr int Y_VIZ = Y_SEP + 4;                            // 326
+static constexpr int VIZ_H = H - Y_VIZ - PAD;                      // 206
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  KronosLookAndFeel
@@ -449,7 +450,7 @@ void FDNReverbEditor::timerCallback() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  resized  — uses named y-positions, no arithmetic drift
+//  resized (修正済：ラムダ式でY座標を受け取るようにし、Row2の重なりを解消)
 // ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::resized()
 {
@@ -463,36 +464,39 @@ void FDNReverbEditor::resized()
     // Algorithm selector
     algoSelector.setBounds(PAD, Y_ALGO, W - PAD * 2, ALGO_H);
 
-    // ── Row 1 knobs (Y_ROW1) ─────────────────────────────────────────────
-    // Group widths: TIME=3, FREQ=2, DIFFUSION=3, STEREO=2, CHARACTER=2  → 12 knobs
-    int kx = PAD;
-    auto next = [&](ArcKnob& k) {
-        k.slider.setBounds(kx, Y_ROW1, KNOB_SIZE, KNOB_SIZE);
-        k.label.setBounds(kx, Y_ROW1 + KNOB_SIZE, KNOB_SIZE, KNOB_LBL_H);
-        kx += KNOB_SIZE + PAD;
+    // ノブ配置用ヘルパーラムダ（X座標とY座標の両方を動的に扱う）
+    auto placeKnob = [&](ArcKnob& k, int& x, int y) {
+        // パラメータ名を一番上に
+        k.label.setBounds(x, y, KNOB_W, KNOB_LBL_H);
+        // その下にノブ本体と数値（テキストボックス）
+        k.slider.setBounds(x, y + KNOB_LBL_H, KNOB_W, KNOB_H);
+        x += KNOB_W + PAD;
         };
-    next(kPreDelay);  next(kRoomSize);  next(kDecay);    // TIME (3)
+
+    // ── Row 1 knobs (Y_ROW1) ─────────────────────────────────────────────
+    int kx = PAD;
+    placeKnob(kPreDelay, kx, Y_ROW1); placeKnob(kRoomSize, kx, Y_ROW1); placeKnob(kDecay, kx, Y_ROW1);
     kx += 6;
-    next(kHFDamp);    next(kLFAbsorb);                   // FREQUENCY (2)
+    placeKnob(kHFDamp, kx, Y_ROW1); placeKnob(kLFAbsorb, kx, Y_ROW1);
     kx += 6;
-    next(kDiffusion); next(kModAmt);    next(kModRate);  // DIFFUSION (3)
+    placeKnob(kDiffusion, kx, Y_ROW1); placeKnob(kModAmt, kx, Y_ROW1); placeKnob(kModRate, kx, Y_ROW1);
     kx += 6;
-    next(kStereoW);   next(kCrossFeed);                  // STEREO (2)
+    placeKnob(kStereoW, kx, Y_ROW1); placeKnob(kCrossFeed, kx, Y_ROW1);
     kx += 6;
-    next(kERLevel);   next(kSaturation);                 // CHARACTER (2)
+    placeKnob(kERLevel, kx, Y_ROW1); placeKnob(kSaturation, kx, Y_ROW1);
 
     // ── Row 2 knobs (Y_ROW2) ─────────────────────────────────────────────
     kx = PAD;
-    next(kWet);  next(kDry);                             // MIX (2)
+    placeKnob(kWet, kx, Y_ROW2); placeKnob(kDry, kx, Y_ROW2);
     kx += 16;
-    next(kDuckAmt); next(kDuckThr); next(kDuckAtt); next(kDuckRel);  // DUCKING (4)
+    placeKnob(kDuckAmt, kx, Y_ROW2); placeKnob(kDuckThr, kx, Y_ROW2); placeKnob(kDuckAtt, kx, Y_ROW2); placeKnob(kDuckRel, kx, Y_ROW2);
 
     // RT60 visualizer
     rt60Viz.setBounds(PAD, Y_VIZ, W - PAD * 2, VIZ_H);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  paint  — section labels drawn at Y_SLABEL1 / Y_SLABEL2 (correct positions)
+//  paint (修正済：KNOB_SIZE から KNOB_W への変数名変更対応)
 // ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::paint(juce::Graphics& g)
 {
@@ -510,23 +514,22 @@ void FDNReverbEditor::paint(juce::Graphics& g)
         PAD + 190, Y_HEADER + 10, W / 2, 12, juce::Justification::centredLeft);
 
     // ── Section separator lines for Row 1 ───────────────────────────────
-    // Groups: TIME(3) | FREQ(2) | DIFFUSION(3) | STEREO(2) | CHARACTER(2)
     static const int gw[] = { 3, 2, 3, 2, 2 };  // knobs per group
     int lx = PAD;
     g.setColour(KronosColors::Separator);
     for (int gi = 0; gi < 4; ++gi) {
-        lx += gw[gi] * (KNOB_SIZE + PAD) + 6;
+        lx += gw[gi] * (KNOB_W + PAD) + 6; // KNOB_W に修正
         g.drawVerticalLine(lx - 3, (float)Y_SLABEL1, (float)(Y_ROW1 + UNIT_H));
     }
 
     // Section separator for Row 2
-    int lx2 = PAD + 2 * (KNOB_SIZE + PAD) + 16;
+    int lx2 = PAD + 2 * (KNOB_W + PAD) + 16; // KNOB_W に修正
     g.drawVerticalLine(lx2 - 3, (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
 
     // Separator before viz
     g.drawHorizontalLine(Y_SEP, (float)PAD, (float)(W - PAD));
 
-    // ── Section labels at Y_SLABEL1 (guaranteed to be below algo selector) ──
+    // ── Section labels at Y_SLABEL1 ──
     g.setFont(juce::Font(juce::FontOptions("Helvetica Neue", 8.5f, juce::Font::bold)));
     g.setColour(KronosColors::Accent.withAlpha(0.75f));
 
@@ -538,18 +541,18 @@ void FDNReverbEditor::paint(juce::Graphics& g)
     // Row 1 section labels
     int bx = PAD;
     sl(bx, Y_SLABEL1, "TIME");
-    bx += gw[0] * (KNOB_SIZE + PAD) + 6;
+    bx += gw[0] * (KNOB_W + PAD) + 6;
     sl(bx, Y_SLABEL1, "FREQUENCY");
-    bx += gw[1] * (KNOB_SIZE + PAD) + 6;
+    bx += gw[1] * (KNOB_W + PAD) + 6;
     sl(bx, Y_SLABEL1, "DIFFUSION");
-    bx += gw[2] * (KNOB_SIZE + PAD) + 6;
+    bx += gw[2] * (KNOB_W + PAD) + 6;
     sl(bx, Y_SLABEL1, "STEREO");
-    bx += gw[3] * (KNOB_SIZE + PAD) + 6;
+    bx += gw[3] * (KNOB_W + PAD) + 6;
     sl(bx, Y_SLABEL1, "CHARACTER");
 
     // Row 2 section labels
     bx = PAD;
     sl(bx, Y_SLABEL2, "MIX");
-    bx += 2 * (KNOB_SIZE + PAD) + 16;
+    bx += 2 * (KNOB_W + PAD) + 16;
     sl(bx, Y_SLABEL2, "DUCKING");
 }
