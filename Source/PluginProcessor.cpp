@@ -9,18 +9,20 @@ FDNReverbAudioProcessor::FDNReverbAudioProcessor()
 }
 
 void FDNReverbAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    int osIdx = (int)*apvts.getRawParameterValue(ParamID::Oversampling);
+    // ─── 修正：Oversamplerを無効化（1x固定）───
+    // FDN/GEQは線形処理なのでOSは不要。CPU負荷を激減させる。
+    int osIdx = 0;  // 強制的に1x（OSなし）
     oversampler = std::make_unique<juce::dsp::Oversampling<float>>(2, osIdx, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true);
     oversampler->initProcessing(static_cast<size_t>(samplesPerBlock));
 
-    double osSampleRate = sampleRate * (1 << osIdx);
-    int osBlockSize = samplesPerBlock * (1 << osIdx);
+    double osSampleRate = sampleRate;  // OSなしなので元のSRそのまま
+    int osBlockSize = samplesPerBlock; // 同上
 
-    // 新エンジンの初期化
     engine.prepare(osSampleRate, osBlockSize);
 
     wetBuffer.setSize(2, osBlockSize);
-    smoothWetGain.reset(sampleRate, 0.05); smoothDryGain.reset(sampleRate, 0.05);
+    smoothWetGain.reset(sampleRate, 0.05);
+    smoothDryGain.reset(sampleRate, 0.05);
     lastSampleRate = sampleRate;
 }
 

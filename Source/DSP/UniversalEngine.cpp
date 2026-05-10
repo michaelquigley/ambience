@@ -247,46 +247,63 @@ namespace FDNReverb {
     void UniversalEngine::processBlock(const float* inL, const float* inR, float* outL, float* outR, int numSamples) noexcept {
         float depthSamples = activeParams.modAmount * 0.002f * static_cast<float>(fs);
         float wetGain = juce::Decibels::decibelsToGain(activeParams.wetDB);
+
+        // ステレオ幅: 0.0 = モノラル、1.0 = フルステレオ
+        const float stereoWidth = activeParams.stereoWidth;
+
         for (int n = 0; n < numSamples; ++n) {
-            float inputMono = (inL[n] + inR[n]) * 0.5f;
-            float erOut = 0.0f;
-            float fdnInput = inputMono;
-            // 1. Input Diffusers
+            // ─── 修正1: 入力のモノ化を廃止 ───
+            // L/R を別々の信号として保持
+            float leftIn = inL[n];
+            float rightIn = inR[n];
+            // モノラル成分（センター）とサイド成分（ステレオ）に分離
+            float midIn = (leftIn + rightIn) * 0.5f;
+            float sideIn = (leftIn - rightIn) * 0.5f;
+
+            float erOutL = 0.0f, erOutR = 0.0f;
+
+            // 1. Input Diffusers (モノラル拡散)
+            float fdnInputMid = midIn;
             if (!bypassInputDiffusers) {
                 for (int i = 0; i < 4; ++i) {
                     float delaySmp = (3.0f + i * 2.0f) * 0.001f * fs;
                     float d = inputDiffusers[i].read(delaySmp);
-                    float w = fdnInput + 0.618f * d;
+                    float w = fdnInputMid + 0.618f * d;
                     inputDiffusers[i].write(w);
-                    fdnInput = d - 0.618f * w;
+                    fdnInputMid = d - 0.618f * w;
                 }
             }
+
             // 2. ER Tapped Delay
             if (!bypassER) {
-                erDelay.write(inputMono);
-                erOut += erDelay.read(15.0f * 0.001f * fs) * 0.5f;
-                erOut += erDelay.read(27.0f * 0.001f * fs) * 0.4f;
-                erOut += erDelay.read(41.0f * 0.001f * fs) * 0.3f;
-                erOut += erDelay.read(59.0f * 0.001f * fs) * 0.2f;
+                erDelay.write(midIn);
+                float erTotal = 0.0f;
+                erTotal += erDelay.read(15.0f * 0.001f * fs) * 0.5f;
+                erTotal += erDelay.read(27.0f * 0.001f * fs) * 0.4f;
+                erTotal += erDelay.read(41.0f * 0.001f * fs) * 0.3f;
+                erTotal += erDelay.read(59.0f * 0.001f * fs) * 0.2f;
+                erOutL = erTotal;
+                erOutR = erTotal;
             }
+
             // 3. FDN + Nested Allpass Loop
             std::array<float, 16> currentFb = fbVec;
             fastWalshHadamardTransform(currentFb);
             applySignFlipping(currentFb);
+
             float fdnOutL = 0.0f, fdnOutR = 0.0f;
             std::array<float, 16> nextFb;
+
             for (int i = 0; i < FDN_ORDER; ++i) {
                 float lfoVal = lfos[i].tick(activeParams.modRate, fs);
                 float delaySmp = fdnBaseDelaySamples[i] + lfoVal * depthSamples;
                 float d = fdnDelays[i].read(delaySmp);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-                // ─── Stage 2c: 10段カスケード GEQ ───
                 for (int s = 0; s < ABSO_STAGES_S2; ++s) {
                     d = absorptionFiltersS2[i][s].tick(d, currentAbsorptionCoeffsS2[i][s]);
                 }
 #else
-                // ─── Stage 1: 1段の Jot 直交化1次フィルタ ───
                 d = absorptionFilters[i].tick(d, currentAbsorptionCoeffs[i]);
 #endif
 
@@ -296,23 +313,47 @@ namespace FDNReverb {
                 float apfW = d + apfGain * apfD;
                 nestedAllpassDelays[i].write(apfW);
                 float apfOut = apfD - apfGain * apfW;
+
                 nextFb[i] = apfOut;
-                fdnDelays[i].write(fdnInput * 0.25f + currentFb[i]);
-                float width = activeParams.stereoWidth;
-                if (i % 2 == 0) { fdnOutL += apfOut * 0.25f; fdnOutR += apfOut * 0.25f * (1.f - width); }
-                else { fdnOutR += apfOut * 0.25f; fdnOutL += apfOut * 0.25f * (1.f - width); }
+
+                // ─── 修正2: FDN 入力に L/R 別々のサイド成分を注入 ───
+                // 各チャンネルに「センター + サイド成分」を異なる位相で注入
+                // 偶数 ch には +sideIn、奇数 ch には -sideIn を加える
+                // これにより L/R で異なる FDN 励起が起きる
+                float sideForCh = (i % 2 == 0 ? +sideIn : -sideIn) * stereoWidth;
+                float fdnInputForThisCh = (fdnInputMid + sideForCh) * 0.25f;
+                fdnDelays[i].write(fdnInputForThisCh + currentFb[i]);
+
+                // ─── 修正3: 出力もシンプルに L/R 振り分け ───
+                // 偶数 ch → L、奇数 ch → R で固定（width で混合度を変える）
+                if (i % 2 == 0) {
+                    fdnOutL += apfOut;
+                    fdnOutR += apfOut * (1.0f - stereoWidth);
+                }
+                else {
+                    fdnOutR += apfOut;
+                    fdnOutL += apfOut * (1.0f - stereoWidth);
+                }
             }
+
+            // 正規化（8ch ずつなので 8 で割る）
+            fdnOutL *= 0.125f;  // 1/8
+            fdnOutR *= 0.125f;
+
             fbVec = nextFb;
+
             // 4. 最終出力
-            float erMix = bypassER ? 0.0f : erOut * activeParams.erLevel;
+            float erMixL = bypassER ? 0.0f : erOutL * activeParams.erLevel;
+            float erMixR = bypassER ? 0.0f : erOutR * activeParams.erLevel;
             float lateMixL = fdnOutL * lateMakeupGainLinear * activeParams.lateLevel;
             float lateMixR = fdnOutR * lateMakeupGainLinear * activeParams.lateLevel;
-            // ─── 追加: AcousticMetrics に Wet 信号を入力 ───
-// L+R モノミックスでメトリクス計算
+
+            // AcousticMetrics に Wet 信号を入力（モノミックス）
             float wetMono = (lateMixL + lateMixR) * 0.5f;
             acousticMetrics.processSample(wetMono);
-            outL[n] = (erMix + lateMixL) * wetGain;
-            outR[n] = (erMix + lateMixR) * wetGain;
+
+            outL[n] = (erMixL + lateMixL) * wetGain;
+            outR[n] = (erMixR + lateMixR) * wetGain;
         }
     }
 } // namespace FDNReverb
