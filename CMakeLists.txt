@@ -43,10 +43,10 @@ target_sources(Ambience PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.h
     Source/PluginEditor.cpp
-    Source/FDNCore.h
-    Source/FDNCore.cpp
+    
+    
     Source/AlgorithmPresets.h
-)
+ "Source/GUI/AmbienceUI.h" "Source/GUI/AmbienceUI.cpp" "Source/DSP/DSPConstants.h" "Source/DSP/BiquadFilters.h" "Source/DSP/BiquadFilters.cpp" "Source/DSP/SAPFStage.h" "Source/DSP/SAPFStage.cpp" "Source/DSP/EarlyReflections.h" "Source/DSP/EarlyReflections.cpp" "Source/DSP/DelayUnit.h" "Source/DSP/DelayUnit.cpp" "Source/PluginParameters.h" "Source/PluginParameters.cpp" "Source/DSP/FDNReverbEngine.h" "Source/DSP/FDNReverbEngine.cpp")
 
 # ============================================================================
 # インクルードパス

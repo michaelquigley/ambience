@@ -1,447 +1,53 @@
-// ============================================================
-//  PluginEditor.cpp  — Ambience FDN Reverb GUI
-//  Fix v3:
-//    1. parameterChanged: use roundToInt(newVal) directly
-//       (AudioParameterChoice passes the INDEX, not normalized 0-1)
-//    2. Layout: explicit y-positions for section labels / knob rows
-//       to eliminate all overlap
-// ============================================================
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include <cmath>
 
-using namespace FDNReverb;
+// Y-座標の計算
+static constexpr int Y_HEADER = 8;
+static constexpr int Y_ALGO = 48;
+static constexpr int Y_SLABEL1 = 86;
+static constexpr int Y_ROW1 = 104;
+static constexpr int Y_SLABEL2 = 204;
+static constexpr int Y_ROW2 = 222;
+static constexpr int Y_SEP = 322;
+static constexpr int Y_VIZ = 326;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Layout constants (修正済：ノブとラベルの領域を整理)
-// ─────────────────────────────────────────────────────────────────────────────
-static constexpr int W = 900;
-static constexpr int H = 540;
-static constexpr int PAD = 8;
-static constexpr int HEADER_H = 32;
-static constexpr int ALGO_H = 30;
-static constexpr int SLABEL_H = 14;   // section label height
-static constexpr int KNOB_W = 64;     // ノブの幅
-static constexpr int KNOB_H = 72;     // ノブ + テキストボックス(数値)の高さ
-static constexpr int KNOB_LBL_H = 14; // 上部のパラメータ名ラベルの高さ
-static constexpr int UNIT_H = KNOB_LBL_H + KNOB_H + 2; // 88
-
-// Named y-positions (自動計算されるためそのまま使用)
-static constexpr int Y_HEADER = PAD;                               // 8
-static constexpr int Y_ALGO = Y_HEADER + HEADER_H + PAD;           // 48
-static constexpr int Y_SLABEL1 = Y_ALGO + ALGO_H + PAD;            // 86
-static constexpr int Y_ROW1 = Y_SLABEL1 + SLABEL_H + 4;            // 104
-static constexpr int Y_SLABEL2 = Y_ROW1 + UNIT_H + PAD;            // 204
-static constexpr int Y_ROW2 = Y_SLABEL2 + SLABEL_H + 4;            // 222
-static constexpr int Y_SEP = Y_ROW2 + UNIT_H + PAD;                // 322
-static constexpr int Y_VIZ = Y_SEP + 4;                            // 326
-static constexpr int VIZ_H = H - Y_VIZ - PAD;                      // 206
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  KronosLookAndFeel
-// ─────────────────────────────────────────────────────────────────────────────
-KronosLookAndFeel::KronosLookAndFeel()
-{
-    setColour(juce::Slider::backgroundColourId, KronosColors::ArcTrack);
-    setColour(juce::Slider::thumbColourId, KronosColors::Accent);
-    setColour(juce::Slider::trackColourId, KronosColors::ArcFill);
-    setColour(juce::Label::textColourId, KronosColors::TextSecondary);
-    setColour(juce::ComboBox::backgroundColourId, KronosColors::Surface);
-    setColour(juce::ComboBox::textColourId, KronosColors::TextPrimary);
-    setColour(juce::ComboBox::outlineColourId, KronosColors::Border);
-    setColour(juce::PopupMenu::backgroundColourId, KronosColors::Panel);
-    setColour(juce::PopupMenu::textColourId, KronosColors::TextPrimary);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, KronosColors::Accent);
-    setColour(juce::TextButton::buttonColourId, KronosColors::Surface);
-    setColour(juce::TextButton::textColourOffId, KronosColors::TextSecondary);
-    setColour(juce::TextButton::textColourOnId, KronosColors::Accent);
-    mainFont = juce::Font(juce::FontOptions("Helvetica Neue", 11.f, juce::Font::plain));
-}
-
-void KronosLookAndFeel::drawRotarySlider(juce::Graphics& g,
-    int x, int y, int w, int h,
-    float sliderPos, float startAngle, float endAngle,
-    juce::Slider& slider)
-{
-    auto b = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h).reduced(4.f);
-    float cx = b.getCentreX(), cy = b.getCentreY();
-    float r = juce::jmin(b.getWidth(), b.getHeight()) * 0.45f;
-    float th = r * 0.22f;
-
-    juce::Path track;
-    track.addCentredArc(cx, cy, r, r, 0.f, startAngle, endAngle, true);
-    g.setColour(KronosColors::ArcTrack);
-    g.strokePath(track, juce::PathStrokeType(th,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    float angle = startAngle + sliderPos * (endAngle - startAngle);
-    juce::Path fill;
-    fill.addCentredArc(cx, cy, r, r, 0.f, startAngle, angle, true);
-    juce::ColourGradient grad(KronosColors::AccentBlue, cx - r, cy,
-        KronosColors::Accent, cx + r, cy, false);
-    g.setGradientFill(grad);
-    g.strokePath(fill, juce::PathStrokeType(th,
-        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    g.setColour(KronosColors::Panel);
-    g.fillEllipse(cx - r * 0.28f, cy - r * 0.28f, r * 0.56f, r * 0.56f);
-
-    float ix = cx + r * 0.6f * std::sin(angle);
-    float iy = cy - r * 0.6f * std::cos(angle);
-    g.setColour(KronosColors::TextPrimary);
-    g.drawLine(cx, cy, ix, iy, 2.f);
-
-    if (slider.hasKeyboardFocus(true)) {
-        g.setColour(KronosColors::Accent.withAlpha(0.5f));
-        g.drawEllipse(cx - r - 3.f, cy - r - 3.f, (r + 3.f) * 2.f, (r + 3.f) * 2.f, 1.5f);
-    }
-}
-
-void KronosLookAndFeel::drawLinearSlider(juce::Graphics& g,
-    int x, int y, int w, int h,
-    float sliderPos, float, float,
-    juce::Slider::SliderStyle, juce::Slider&)
-{
-    auto b = juce::Rectangle<int>(x, y, w, h).toFloat();
-    float ty = b.getCentreY() - 2.f;
-    g.setColour(KronosColors::ArcTrack);
-    g.fillRoundedRectangle(b.getX(), ty, b.getWidth(), 4.f, 2.f);
-    g.setColour(KronosColors::Accent);
-    g.fillRoundedRectangle(b.getX(), ty, sliderPos - b.getX(), 4.f, 2.f);
-    float r = 7.f;
-    g.setColour(KronosColors::TextPrimary);
-    g.fillEllipse(sliderPos - r, b.getCentreY() - r, r * 2.f, r * 2.f);
-}
-
-void KronosLookAndFeel::drawComboBox(juce::Graphics& g,
-    int w, int h, bool isDown, int, int, int, int, juce::ComboBox&)
-{
-    auto b = juce::Rectangle<int>(0, 0, w, h).toFloat();
-    g.setColour(isDown ? KronosColors::Panel : KronosColors::Surface);
-    g.fillRoundedRectangle(b, 3.f);
-    g.setColour(KronosColors::Border);
-    g.drawRoundedRectangle(b.reduced(0.5f), 3.f, 1.f);
-    juce::Path arrow;
-    arrow.addTriangle(w - 16.f, h * 0.5f - 3.f, w - 8.f, h * 0.5f - 3.f, w - 12.f, h * 0.5f + 3.f);
-    g.setColour(KronosColors::TextSecondary);
-    g.fillPath(arrow);
-}
-
-void KronosLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label) {
-    label.setBounds(6, 1, box.getWidth() - 22, box.getHeight() - 2);
-    label.setFont(getComboBoxFont(box));
-}
-
-juce::Font KronosLookAndFeel::getLabelFont(juce::Label&) {
-    return mainFont.withHeight(10.f);
-}
-juce::Font KronosLookAndFeel::getComboBoxFont(juce::ComboBox&) {
-    return mainFont.withHeight(11.f);
-}
-
-void KronosLookAndFeel::drawGroupComponentOutline(juce::Graphics& g,
-    int w, int h, const juce::String& text,
-    const juce::Justification&, juce::GroupComponent&)
-{
-    float textH = 12.f, indent = 8.f, yOff = textH * 0.5f;
-    juce::Path p;
-    p.startNewSubPath(indent + 4.f, yOff); p.lineTo(indent, yOff);
-    p.lineTo(indent, (float)h - 1.f); p.lineTo((float)w - indent, (float)h - 1.f);
-    p.lineTo((float)w - indent, yOff);
-    float tw = mainFont.withHeight(textH).getStringWidth(text) + 6.f;
-    p.lineTo(indent + 14.f + tw, yOff);
-    g.setColour(KronosColors::Border);
-    g.strokePath(p, juce::PathStrokeType(1.f));
-    g.setColour(KronosColors::TextSecondary);
-    g.setFont(mainFont.withHeight(textH).boldened());
-    g.drawText(text, (int)(indent + 14.f), 0, (int)tw, (int)textH,
-        juce::Justification::centredLeft);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  RT60 Visualizer
-// ─────────────────────────────────────────────────────────────────────────────
-RT60Visualizer::RT60Visualizer() {
-    displayRT60 = ALL_PRESETS[0]->acoustics.rt60;
-    startTimerHz(15);
-}
-RT60Visualizer::~RT60Visualizer() { stopTimer(); }
-
-void RT60Visualizer::timerCallback() {
-    if (!processor) return;
-    auto live = processor->getRT60ForDisplay();
-    for (int i = 0; i < NUM_BANDS; ++i)
-        displayRT60[i] += 0.25f * (live[i] - displayRT60[i]);
-    repaint();
-}
-
-void RT60Visualizer::paint(juce::Graphics& g) {
-    auto b = getLocalBounds().toFloat().reduced(2.f);
-    float W2 = b.getWidth(), H2 = b.getHeight();
-    float x0 = b.getX(), y0 = b.getY();
-
-    g.setColour(KronosColors::Surface);
-    g.fillRoundedRectangle(b, 4.f);
-    g.setColour(KronosColors::Border);
-    g.drawRoundedRectangle(b.reduced(0.5f), 4.f, 1.f);
-
-    float logMin = std::log10(MIN_RT60_DISPLAY);
-    float logMax = std::log10(MAX_RT60_DISPLAY);
-
-    static const float gridVals[] = { 0.1f,0.3f,0.5f,1.0f,2.0f,4.0f,8.0f };
-    g.setColour(KronosColors::Separator);
-    for (float v : gridVals) {
-        float ny = 1.f - (std::log10(v) - logMin) / (logMax - logMin);
-        g.drawHorizontalLine((int)(y0 + ny * H2), x0 + 36.f, x0 + W2 - 4.f);
-    }
-
-    g.setFont(8.5f);
-    g.setColour(KronosColors::TextSecondary);
-    static const char* fLbls[] = { "31","63","125","250","500","1k","2k","4k","8k","16k" };
-    for (int i = 0; i < NUM_BANDS; ++i) {
-        float px = x0 + 36.f + (float)i / (NUM_BANDS - 1) * (W2 - 40.f);
-        g.drawText(fLbls[i], (int)(px - 12.f), (int)(y0 + H2 - 14.f), 24, 13,
-            juce::Justification::centred);
-    }
-    for (float v : gridVals) {
-        float ny = 1.f - (std::log10(v) - logMin) / (logMax - logMin);
-        float py = y0 + ny * H2;
-        juce::String lbl = (v < 1.f) ? juce::String(v, 1) + "s" : juce::String((int)v) + "s";
-        g.drawText(lbl, (int)(x0 + 2.f), (int)(py - 7.f), 32, 14,
-            juce::Justification::centredLeft);
-    }
-
-    auto plotCurve = [&](const std::array<float, NUM_BANDS>& rt60,
-        juce::Colour col, float thick) {
-            juce::Path path;
-            bool first = true;
-            for (int i = 0; i < NUM_BANDS; ++i) {
-                float v = std::clamp(rt60[i], MIN_RT60_DISPLAY, MAX_RT60_DISPLAY);
-                float ny = 1.f - (std::log10(v) - logMin) / (logMax - logMin);
-                float px = x0 + 36.f + (float)i / (NUM_BANDS - 1) * (W2 - 40.f);
-                float py = y0 + ny * H2;
-                if (first) { path.startNewSubPath(px, py); first = false; }
-                else        path.lineTo(px, py);
-            }
-            g.setColour(col);
-            g.strokePath(path, juce::PathStrokeType(thick,
-                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            for (int i = 0; i < NUM_BANDS; ++i) {
-                float v = std::clamp(rt60[i], MIN_RT60_DISPLAY, MAX_RT60_DISPLAY);
-                float ny = 1.f - (std::log10(v) - logMin) / (logMax - logMin);
-                float px = x0 + 36.f + (float)i / (NUM_BANDS - 1) * (W2 - 40.f);
-                float py = y0 + ny * H2;
-                g.fillEllipse(px - 3.f, py - 3.f, 6.f, 6.f);
-            }
-        };
-
-    if (processor) {
-        int algo = (int)*processor->apvts.getRawParameterValue("algorithm");
-        auto& preset = *ALL_PRESETS[juce::jlimit(0, NUM_ALGORITHMS - 1, algo)];
-        plotCurve(preset.acoustics.rt60,
-            KronosColors::TextSecondary.withAlpha(0.5f), 1.f);
-    }
-    plotCurve(displayRT60, KronosColors::Accent, 2.f);
-
-    g.setColour(KronosColors::TextSecondary);
-    g.setFont(9.f);
-    g.drawText("RT60 (s) per band", (int)x0 + 36, (int)y0 + 3, (int)W2 - 40, 12,
-        juce::Justification::right);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  VUMeter
-// ─────────────────────────────────────────────────────────────────────────────
-VUMeter::VUMeter(const juce::String& lbl, Side s) : label(lbl), side(s) {}
-void VUMeter::paint(juce::Graphics& g) {
-    auto b = getLocalBounds().toFloat().reduced(1.f);
-    g.setColour(KronosColors::Surface);
-    g.fillRoundedRectangle(b, 3.f);
-    float bx = b.getX() + 22.f, bw = b.getWidth() - 22.f;
-    auto bar = [&](float y, float level) {
-        float n = juce::jlimit(0.f, 1.f, juce::jmap(
-            juce::Decibels::gainToDecibels(level + 1e-9f), -60.f, 0.f, 0.f, 1.f));
-        g.setColour(KronosColors::ArcTrack);
-        g.fillRoundedRectangle(bx, y, bw, 7.f, 2.f);
-        juce::ColourGradient gr(KronosColors::AccentBlue, bx, y, KronosColors::Accent, bx + bw, y, false);
-        g.setGradientFill(gr);
-        g.fillRoundedRectangle(bx, y, bw * n, 7.f, 2.f);
-        };
-    bar(b.getY() + 2.f, levelL);
-    bar(b.getY() + 11.f, levelR);
-    g.setColour(KronosColors::TextSecondary);
-    g.setFont(8.f);
-    g.drawText(label, (int)b.getX(), (int)b.getY(), 20, (int)b.getHeight(),
-        juce::Justification::centredLeft);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  ArcKnob
-// ─────────────────────────────────────────────────────────────────────────────
-void ArcKnob::build(juce::AudioProcessorValueTreeState& apvts,
-    const juce::String& paramID,
-    const juce::String& labelText,
-    juce::Component* parent,
-    KronosLookAndFeel& laf)
-{
-    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 62, 14);
-    slider.setLookAndFeel(&laf);
-    slider.setColour(juce::Slider::textBoxTextColourId, KronosColors::TextSecondary);
-    slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    parent->addAndMakeVisible(slider);
-
-    label.setText(labelText, juce::dontSendNotification);
-    label.setJustificationType(juce::Justification::centred);
-    label.setFont(juce::Font(juce::FontOptions(9.f)));
-    label.setColour(juce::Label::textColourId, KronosColors::TextSecondary);
-    parent->addAndMakeVisible(label);
-
-    attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        apvts, paramID, slider);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  AlgorithmSelector
-// ─────────────────────────────────────────────────────────────────────────────
-AlgorithmSelector::AlgorithmSelector(juce::AudioProcessorValueTreeState& a)
-    : apvts(a)
-{
-    static const char* names[] = {
-        "ROOM1","ROOM2","HALL1","HALL2","PLATE","SPRING","GOLDFOIL"
-    };
-    for (int i = 0; i < NUM_ALGORITHMS; ++i) {
-        buttons[i].setButtonText(names[i]);
-        buttons[i].setClickingTogglesState(false);
-        addAndMakeVisible(buttons[i]);
-
-        int idx = i;
-        buttons[i].onClick = [this, idx] {
-            if (auto* param = apvts.getParameter("algorithm"))
-                param->setValueNotifyingHost((float)idx / (float)(NUM_ALGORITHMS - 1));
-            };
-    }
-
-    apvts.addParameterListener("algorithm", this);
-    // getRawParameterValue for AudioParameterChoice returns normalized 0-1
-    currentAlgo = juce::roundToInt(
-        *apvts.getRawParameterValue("algorithm") * (NUM_ALGORITHMS - 1));
-    updateButtonColors();
-}
-
-AlgorithmSelector::~AlgorithmSelector() {
-    apvts.removeParameterListener("algorithm", this);
-}
-
-// ─── [FIX] parameterChanged receives the INDEX (not normalized 0-1) ─────────
-void AlgorithmSelector::parameterChanged(const juce::String&, float newVal)
-{
-    // AudioParameterChoice calls listeners with the DENORMALIZED index value
-    int newAlgo = juce::jlimit(0, NUM_ALGORITHMS - 1, juce::roundToInt(newVal));
-    juce::MessageManager::callAsync([this, newAlgo] {
-        currentAlgo = newAlgo;
-        updateButtonColors();
-        });
-}
-
-void AlgorithmSelector::updateButtonColors()
-{
-    for (int i = 0; i < NUM_ALGORITHMS; ++i) {
-        bool on = (i == currentAlgo);
-        buttons[i].setColour(juce::TextButton::buttonColourId,
-            on ? KronosColors::Accent : KronosColors::Surface);
-        buttons[i].setColour(juce::TextButton::textColourOffId,
-            on ? KronosColors::Background : KronosColors::TextSecondary);
-        buttons[i].repaint();
-    }
-}
-
-void AlgorithmSelector::paint(juce::Graphics& g) {
-    g.setColour(KronosColors::Surface);
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.f);
-}
-
-void AlgorithmSelector::resized() {
-    auto area = getLocalBounds().reduced(2);
-    int btnW = area.getWidth() / NUM_ALGORITHMS;
-    for (int i = 0; i < NUM_ALGORITHMS; ++i)
-        buttons[i].setBounds(area.getX() + i * btnW, area.getY(), btnW - 1, area.getHeight());
-    updateButtonColors();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  FDNReverbEditor
-// ─────────────────────────────────────────────────────────────────────────────
 FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
-    : AudioProcessorEditor(&p),
-    audioProcessor(p),
-    algoSelector(p.apvts),
-    vuIn("IN", VUMeter::Side::Input),
-    vuOut("OUT", VUMeter::Side::Output)
+    : AudioProcessorEditor(&p), audioProcessor(p), algoSelector(p.apvts),
+    vuIn("IN", VUMeter::Side::Input), vuOut("OUT", VUMeter::Side::Output)
 {
     setLookAndFeel(&laf);
     setSize(W, H);
-    setOpaque(true);
 
     titleLabel.setText("AMBIENCE", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(juce::FontOptions("Helvetica Neue", 14.f, juce::Font::bold)));
-    titleLabel.setColour(juce::Label::textColourId, KronosColors::TextPrimary);
-    titleLabel.setJustificationType(juce::Justification::centredLeft);
+    titleLabel.setColour(juce::Label::textColourId, AmbienceColors::TextPrimary);
     addAndMakeVisible(titleLabel);
 
     addAndMakeVisible(algoSelector);
 
-#define BK(k,id,lbl) k.build(p.apvts, id, lbl, this, laf)
-    BK(kPreDelay, "predelay", "PRE-DELAY");
-    BK(kRoomSize, "roomsize", "ROOM SIZE");
-    BK(kDecay, "decaytime", "DECAY");
-    BK(kHFDamp, "hfdamping", "HF DAMP");
-    BK(kLFAbsorb, "lfabsorption", "LF ABSORB");
-    BK(kDiffusion, "diffusion", "DIFFUSION");
-    BK(kModAmt, "modamount", "MOD AMT");
-    BK(kModRate, "modrate", "MOD RATE");
-    BK(kStereoW, "stereowidth", "WIDTH");
-    BK(kCrossFeed, "crossfeed", "X-FEED");
-    BK(kERLevel, "erlevel", "ER LEVEL");
-    BK(kSaturation, "saturation", "SATURATE");
-    BK(kWet, "wetlevel", "WET");
-    BK(kDry, "drylevel", "DRY");
-    BK(kDuckAmt, "duckamount", "AMOUNT");
-    BK(kDuckThr, "duckthresh", "THRESH");
-    BK(kDuckAtt, "duckattack", "ATTACK");
-    BK(kDuckRel, "duckrelease", "RELEASE");
-#undef BK
+    // Build Knobs
+    auto BK = [&](ArcKnob& k, const char* id, const char* lbl) { k.build(p.apvts, id, lbl, this, laf); };
+    BK(kPreDelay, "predelay", "PRE-DELAY"); BK(kRoomSize, "roomsize", "ROOM SIZE"); BK(kDecay, "decaytime", "DECAY");
+    BK(kHFDamp, "hfdamping", "HF DAMP"); BK(kLFAbsorb, "lfabsorption", "LF ABSORB");
+    BK(kDiffusion, "diffusion", "DIFFUSION"); BK(kModAmt, "modamount", "MOD AMT"); BK(kModRate, "modrate", "MOD RATE");
+    BK(kStereoW, "stereowidth", "WIDTH"); BK(kCrossFeed, "crossfeed", "X-FEED");
+    BK(kERLevel, "erlevel", "ER LEVEL"); BK(kSaturation, "saturation", "SATURATE");
+    BK(kWet, "wetlevel", "WET"); BK(kDry, "drylevel", "DRY");
+    BK(kDuckAmt, "duckamount", "AMOUNT"); BK(kDuckThr, "duckthresh", "THRESH"); BK(kDuckAtt, "duckattack", "ATTACK"); BK(kDuckRel, "duckrelease", "RELEASE");
 
-    oversamplingLabel.setText("OS", juce::dontSendNotification);
-    oversamplingLabel.setColour(juce::Label::textColourId, KronosColors::TextSecondary);
-    oversamplingLabel.setFont(juce::Font(juce::FontOptions(9.f)));
-    addAndMakeVisible(oversamplingLabel);
-
-    oversamplingCombo.addItem("1x", 1); oversamplingCombo.addItem("2x", 2);
-    oversamplingCombo.addItem("4x", 3); oversamplingCombo.addItem("8x", 4);
+    oversamplingCombo.addItemList({ "1x", "2x", "4x", "8x" }, 1);
     oversamplingCombo.setLookAndFeel(&laf);
     addAndMakeVisible(oversamplingCombo);
-    osAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        p.apvts, "oversampling", oversamplingCombo);
+    osAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(p.apvts, "oversampling", oversamplingCombo);
 
     rt60Viz.setProcessor(&p);
     addAndMakeVisible(rt60Viz);
-    addAndMakeVisible(vuIn);
-    addAndMakeVisible(vuOut);
+    addAndMakeVisible(vuIn); addAndMakeVisible(vuOut);
 
     startTimerHz(60);
 }
 
-FDNReverbEditor::~FDNReverbEditor() {
-    stopTimer();
-    setLookAndFeel(nullptr);
-    for (auto* k : { &kPreDelay,&kRoomSize,&kDecay,&kHFDamp,&kLFAbsorb,
-                     &kDiffusion,&kModAmt,&kModRate,&kStereoW,&kCrossFeed,
-                     &kERLevel,&kSaturation,&kWet,&kDry,
-                     &kDuckAmt,&kDuckThr,&kDuckAtt,&kDuckRel })
-        k->slider.setLookAndFeel(nullptr);
-    oversamplingCombo.setLookAndFeel(nullptr);
-}
+FDNReverbEditor::~FDNReverbEditor() { stopTimer(); setLookAndFeel(nullptr); }
 
 void FDNReverbEditor::timerCallback() {
     vuIn.setLevels(audioProcessor.getInputRMSL(), audioProcessor.getInputRMSR());
@@ -449,96 +55,69 @@ void FDNReverbEditor::timerCallback() {
     vuIn.repaint(); vuOut.repaint();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  resized (修正済：ラムダ式でY座標を受け取るようにし、Row2の重なりを解消)
-// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::resized()
 {
-    // Header
-    titleLabel.setBounds(PAD, Y_HEADER, 180, HEADER_H);
-    oversamplingLabel.setBounds(W - 96, Y_HEADER + 6, 18, 12);
+    titleLabel.setBounds(PAD, Y_HEADER, 180, 32);
     oversamplingCombo.setBounds(W - 76, Y_HEADER + 4, 68, 18);
     vuIn.setBounds(W - 220, Y_HEADER + 2, 96, 28);
     vuOut.setBounds(W - 120, Y_HEADER + 2, 96, 28);
+    algoSelector.setBounds(PAD, Y_ALGO, W - PAD * 2, 30);
 
-    // Algorithm selector
-    algoSelector.setBounds(PAD, Y_ALGO, W - PAD * 2, ALGO_H);
-
-    // ノブ配置用ヘルパーラムダ（X座標とY座標の両方を動的に扱う）
-    auto placeKnob = [&](ArcKnob& k, int& x, int y) {
-        // パラメータ名を一番上に
+    auto place = [&](ArcKnob& k, int& x, int y) {
         k.label.setBounds(x, y, KNOB_W, KNOB_LBL_H);
-        // その下にノブ本体と数値（テキストボックス）
         k.slider.setBounds(x, y + KNOB_LBL_H, KNOB_W, KNOB_H);
         x += KNOB_W + PAD;
         };
 
-    // ── Row 1 knobs (Y_ROW1) ─────────────────────────────────────────────
     int kx = PAD;
-    placeKnob(kPreDelay, kx, Y_ROW1); placeKnob(kRoomSize, kx, Y_ROW1); placeKnob(kDecay, kx, Y_ROW1);
-    kx += 6;
-    placeKnob(kHFDamp, kx, Y_ROW1); placeKnob(kLFAbsorb, kx, Y_ROW1);
-    kx += 6;
-    placeKnob(kDiffusion, kx, Y_ROW1); placeKnob(kModAmt, kx, Y_ROW1); placeKnob(kModRate, kx, Y_ROW1);
-    kx += 6;
-    placeKnob(kStereoW, kx, Y_ROW1); placeKnob(kCrossFeed, kx, Y_ROW1);
-    kx += 6;
-    placeKnob(kERLevel, kx, Y_ROW1); placeKnob(kSaturation, kx, Y_ROW1);
+    place(kPreDelay, kx, Y_ROW1); place(kRoomSize, kx, Y_ROW1); place(kDecay, kx, Y_ROW1); kx += 6;
+    place(kHFDamp, kx, Y_ROW1); place(kLFAbsorb, kx, Y_ROW1); kx += 6;
+    place(kDiffusion, kx, Y_ROW1); place(kModAmt, kx, Y_ROW1); place(kModRate, kx, Y_ROW1); kx += 6;
+    place(kStereoW, kx, Y_ROW1); place(kCrossFeed, kx, Y_ROW1); kx += 6;
+    place(kERLevel, kx, Y_ROW1); place(kSaturation, kx, Y_ROW1);
 
-    // ── Row 2 knobs (Y_ROW2) ─────────────────────────────────────────────
     kx = PAD;
-    placeKnob(kWet, kx, Y_ROW2); placeKnob(kDry, kx, Y_ROW2);
-    kx += 16;
-    placeKnob(kDuckAmt, kx, Y_ROW2); placeKnob(kDuckThr, kx, Y_ROW2); placeKnob(kDuckAtt, kx, Y_ROW2); placeKnob(kDuckRel, kx, Y_ROW2);
+    place(kWet, kx, Y_ROW2); place(kDry, kx, Y_ROW2); kx += 16;
+    place(kDuckAmt, kx, Y_ROW2); place(kDuckThr, kx, Y_ROW2); place(kDuckAtt, kx, Y_ROW2); place(kDuckRel, kx, Y_ROW2);
 
-    // RT60 visualizer
-    rt60Viz.setBounds(PAD, Y_VIZ, W - PAD * 2, VIZ_H);
+    rt60Viz.setBounds(PAD, Y_VIZ, W - PAD * 2, H - Y_VIZ - PAD);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  paint (修正済：KNOB_SIZE から KNOB_W への変数名変更対応)
-// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(KronosColors::Background);
-
-    juce::ColourGradient grad(KronosColors::Surface.withAlpha(0.12f), 0.f, 0.f,
-        KronosColors::Background, 0.f, (float)H, false);
+    g.fillAll(AmbienceColors::Background);
+    juce::ColourGradient grad(AmbienceColors::Surface.withAlpha(0.12f), 0.f, 0.f, AmbienceColors::Background, 0.f, (float)H, false);
     g.setGradientFill(grad);
     g.fillAll();
 
-    // Subtitle (all ASCII)
+    // サブタイトル
     g.setFont(juce::Font(juce::FontOptions(8.f)));
-    g.setColour(KronosColors::TextSecondary.withAlpha(0.35f));
+    g.setColour(AmbienceColors::TextSecondary.withAlpha(0.35f));
     g.drawText("8ch FDN | SAPF | ISM-ER | 44.1-192kHz | 1-8x OS",
         PAD + 190, Y_HEADER + 10, W / 2, 12, juce::Justification::centredLeft);
 
-    // ── Section separator lines for Row 1 ───────────────────────────────
-    static const int gw[] = { 3, 2, 3, 2, 2 };  // knobs per group
+    // ── Row 1 のセクション縦区切り線 ──
+    static const int gw[] = { 3, 2, 3, 2, 2 };  // グループごとのノブの数
     int lx = PAD;
-    g.setColour(KronosColors::Separator);
+    g.setColour(AmbienceColors::Separator);
     for (int gi = 0; gi < 4; ++gi) {
-        lx += gw[gi] * (KNOB_W + PAD) + 6; // KNOB_W に修正
+        lx += gw[gi] * (KNOB_W + PAD) + 6;
         g.drawVerticalLine(lx - 3, (float)Y_SLABEL1, (float)(Y_ROW1 + UNIT_H));
     }
 
-    // Section separator for Row 2
-    int lx2 = PAD + 2 * (KNOB_W + PAD) + 16; // KNOB_W に修正
+    // ── Row 2 のセクション縦区切り線 ──
+    int lx2 = PAD + 2 * (KNOB_W + PAD) + 16;
     g.drawVerticalLine(lx2 - 3, (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
 
-    // Separator before viz
+    // Visualizer直前の横線
     g.drawHorizontalLine(Y_SEP, (float)PAD, (float)(W - PAD));
 
-    // ── Section labels at Y_SLABEL1 ──
+    // ── オレンジ色のセクションラベル ──
     g.setFont(juce::Font(juce::FontOptions("Helvetica Neue", 8.5f, juce::Font::bold)));
-    g.setColour(KronosColors::Accent.withAlpha(0.75f));
+    g.setColour(AmbienceColors::Accent.withAlpha(0.75f));
+    auto sl = [&](int x, int y, const char* t) { g.drawText(t, x, y, 120, 14, juce::Justification::centredLeft); };
 
-    auto sl = [&](int sx, int sy, const char* text) {
-        g.drawText(juce::String(text), sx, sy, 120, SLABEL_H,
-            juce::Justification::centredLeft);
-        };
-
-    // Row 1 section labels
+    // Row 1 ラベル
     int bx = PAD;
     sl(bx, Y_SLABEL1, "TIME");
     bx += gw[0] * (KNOB_W + PAD) + 6;
@@ -550,7 +129,7 @@ void FDNReverbEditor::paint(juce::Graphics& g)
     bx += gw[3] * (KNOB_W + PAD) + 6;
     sl(bx, Y_SLABEL1, "CHARACTER");
 
-    // Row 2 section labels
+    // Row 2 ラベル
     bx = PAD;
     sl(bx, Y_SLABEL2, "MIX");
     bx += 2 * (KNOB_W + PAD) + 16;
