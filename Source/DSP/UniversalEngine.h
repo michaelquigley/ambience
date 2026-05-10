@@ -9,11 +9,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  コンパイル時スイッチ: Stage 2 吸収フィルタ使用フラグ
 // ─────────────────────────────────────────────────────────────────────────────
-//  1: Stage 2 (Välimäki–Liski 累積バイカッドGEQ, 12段カスケード) を使用
+//  1: Stage 2c (Välimäki–Liski 累積バイカッドGEQ, 10段カスケード) を使用
 //  0: Stage 1 (Jot 直交化1次, 1段) にフォールバック
 //
-//  ロールバック用のセーフティスイッチ。万が一不具合が出た場合に
-//  この行を 0 に変更して再ビルドすれば即座に Stage 1 に戻せる。
+//  ロールバック用のセーフティスイッチ。
 // ─────────────────────────────────────────────────────────────────────────────
 #define AMBIENCE_USE_STAGE2_ABSORPTION 1
 
@@ -37,9 +36,7 @@ namespace FDNReverb {
         inline float tick(float rateHz, float sampleRate) noexcept {
             if (stepsRemaining <= 0) {
                 target = nextRandom();
-                // LFOのレートに応じて新しいターゲットを設定する間隔を決定
                 stepsRemaining = static_cast<int>(sampleRate / std::max(0.1f, rateHz));
-                // スムージング係数の計算（ワンポール・ローパス）
                 coeff = 1.0f - std::exp(-2.0f * 3.14159265f * rateHz / sampleRate);
             }
             stepsRemaining--;
@@ -77,11 +74,9 @@ namespace FDNReverb {
         std::array<LinearDelayLine, FDN_ORDER> nestedAllpassDelays;
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-        // Stage 2: 12段カスケード (プリシェルフ + GEQ x 10 + LFユーザー補正)
+        // Stage 2c: 10段カスケード (GEQ のみ、midGain は band 0 に吸収)
         std::array<std::array<BiquadState, ABSO_STAGES_S2>, FDN_ORDER> absorptionFiltersS2;
         std::array<std::array<BiquadCoeffs, ABSO_STAGES_S2>, FDN_ORDER> currentAbsorptionCoeffsS2;
-        // 各遅延ラインの中域基準ゲイン (Biquad カスケード前に乗算する DC スカラー)
-        std::array<float, FDN_ORDER> absorptionMidGain;
 #else
         // Stage 1: 1段のみ
         std::array<BiquadState, FDN_ORDER> absorptionFilters;
@@ -96,7 +91,7 @@ namespace FDNReverb {
         bool bypassER{ false };
         bool bypassInputDiffusers{ true };
         float lateMixScale{ 1.0f };
-        // ▼ 追加：動的メイクアップゲイン（Late Reverb専用）
+        // ▼ 動的メイクアップゲイン（Late Reverb専用）
         float lateMakeupGainLinear{ 1.0f };
         std::array<float, NUM_BANDS> effectiveRT60;
     };

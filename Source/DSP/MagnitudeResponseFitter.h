@@ -16,11 +16,14 @@ namespace FDNReverb {
     //      Jot–Chaigne (AES Preprint 3030, 1991) の直交化1次フィルタ。
     //      DC と Nyquist の 2 点だけで設計する軽量版。
     //
-    //    Stage 2 (Välimäki–Liski 累積バイカッドGEQ):
+    //    Stage 2c (Välimäki–Liski 累積バイカッドGEQ):
     //      Välimäki & Liski (IEEE SPL 2017) の Interaction Matrix + WLS による
     //      10バンド厳密フィッティング。
-    //      Two-Stage Attenuation Filter (Välimäki/Prawda/Schlecht 2024) として
-    //      プリシェルフ + 10段Biquad の二段構成。
+    //
+    //      安全性保証:
+    //        - 目標 dB を 0 以下にクランプ → ループゲイン ≤ 1 を保証
+    //        - midGain を band 0 の b0/b1/b2 に吸収 → 二重適用なし
+    //        - LF/HF ユーザー補正は GEQ 目標 dB に加算 → 独立段なし
     //
     //  重要:
     //    - dB スケールでなく T60 dB スケール (-60·m / (fs·T60)) でフィッティング
@@ -50,28 +53,21 @@ namespace FDNReverb {
         };
 
         // ─────────────────────────────────────────────────────────────────────────
-        //  Stage 2 用設計結果（新規）
+        //  Stage 2c 用設計結果（修正版）
         // ─────────────────────────────────────────────────────────────────────────
-        // Two-Stage 構成:
-        //   preFilter = Two-Stage Attenuation Filter のプリシェルフ
-        //               (DC と Nyquist 端の T60 を粗く当てる 1 次シェルフを Biquad 化)
-        //               実装上は Low Shelf 1段 + High Shelf 1段の合成で表現するが、
-        //               簡略化のため High Shelf 1段に集約 (DC は GEQ に任せる)
-        //   geqStages = 10 オクターブバンド (31Hz〜16kHz) のシンメトリックBiquad GEQ
-        //               Interaction Matrix + WLS で係数を決定
-        //   midGain   = 全段共通の中域ループゲイン (周波数非依存項)
+        // 10 段の GEQ のみで構成される。
+        //   geqStages[0]   = band 0 (31.25Hz)、midGain を係数に吸収済み
+        //   geqStages[1..9] = band 1〜9 (62.5Hz〜16kHz)、純粋な GEQ
         //
-        // フィルタ実行順序: midGain → preFilter → geqStages[0..9]
+        // フィルタ実行順序: geqStages[0] → geqStages[1] → ... → geqStages[9]
+        // 独立した midGain 乗算は不要 (band 0 に吸収済み)。
         struct DesignResultStage2 {
-            float midGain{ 1.0f };                          // 中域ループゲイン (DC スカラー)
-            BiquadCoeffs preFilter;                         // プリシェルフ (Nyquist 端補正)
             std::array<BiquadCoeffs, NUM_BANDS> geqStages;  // 10段 GEQ
-            BiquadCoeffs lfUserShelf;                       // ユーザー LF Absorption 補正
-            BiquadCoeffs hfUserShelf;                       // ユーザー HF Damping 補正
 
             // デバッグ・可視化用
-            std::array<float, NUM_BANDS> targetDb;          // 各バンドの目標 dB
+            std::array<float, NUM_BANDS> targetDb;          // 各バンドの目標 dB (クランプ後)
             std::array<float, NUM_BANDS> commandDb;         // WLS で求めた実コマンド dB
+            float midGainAbsorbed{ 1.0f };                  // band 0 に吸収された midGain
         };
 
         // ─────────────────────────────────────────────────────────────────────────
@@ -85,7 +81,7 @@ namespace FDNReverb {
             float lfAbsorption);
 
         // ─────────────────────────────────────────────────────────────────────────
-        //  Stage 2 設計関数（新規）
+        //  Stage 2c 設計関数（修正版）
         // ─────────────────────────────────────────────────────────────────────────
         static DesignResultStage2 designStage2(
             int delaySamples,
@@ -97,11 +93,7 @@ namespace FDNReverb {
         // ─────────────────────────────────────────────────────────────────────────
         //  Interaction Matrix の事前計算（起動時に1回呼ぶ）
         // ─────────────────────────────────────────────────────────────────────────
-        // サンプルレートが変わったら再計算する必要がある
-        // 内部で 10x10 の double 行列をキャッシュ
         static void precomputeInteractionMatrix(double sampleRate);
-
-        // 現在キャッシュされている Interaction Matrix のサンプルレート
         static double getCachedSampleRate() noexcept { return cachedSampleRate; }
 
     private:
@@ -113,37 +105,24 @@ namespace FDNReverb {
         static float getT60AtNyquist(const std::array<float, NUM_BANDS>& rt60, double sampleRate) noexcept;
 
         // ── Stage 2 ヘルパー ──
-
-        // シンメトリックBiquad ピークフィルタの設計
-        // (Välimäki–Liski 流: ゲインに対して対称な振幅応答を持つピークEQ)
         static BiquadCoeffs designSymmetricPeakBiquad(
             float fcHz, float gainDB, float Q, double sampleRate) noexcept;
-
-        // バンド中心周波数の取得
         static const std::array<float, NUM_BANDS>& getBandFreqs() noexcept { return BAND_FREQ; }
-
-        // バンド Q 値の取得（オクターブバンド用）
         static const std::array<float, NUM_BANDS>& getBandQs() noexcept;
-
-        // フィルタの周波数応答振幅 (dB) を計算
-        // 評価周波数 fEval [Hz] における Biquad の |H(e^jω)| (dB) を返す
         static float biquadMagnitudeDB(const BiquadCoeffs& c, float fEval, double sampleRate) noexcept;
-
-        // 10x10 LDLT 分解 + 線形ソルバ
-        // 入力: A (10x10, 対称正定値), b (10次)
-        // 出力: x (10次) such that A·x = b
         static void solveLDLT10(
             const std::array<std::array<double, NUM_BANDS>, NUM_BANDS>& A,
             const std::array<double, NUM_BANDS>& b,
             std::array<double, NUM_BANDS>& x) noexcept;
 
+        // Biquad 係数全体に DC ゲインを乗算 (b0, b1, b2 を gain 倍)
+        // これにより独立 DC スカラー適用と数学的に等価なフィルタになる
+        static BiquadCoeffs absorbGainIntoBiquad(const BiquadCoeffs& c, float linearGain) noexcept;
+
         // ── Stage 2 静的キャッシュ ──
-        // Interaction Matrix B[i][j] = 「j 番目のフィルタを 1 dB に設定したとき、
-        //                              i 番目のバンド中心 fc[i] で観測される dB」
-        // サンプルレートに依存するため変更時に再計算
         static std::array<std::array<double, NUM_BANDS>, NUM_BANDS> cachedB;
-        static std::array<std::array<double, NUM_BANDS>, NUM_BANDS> cachedBtWB;  // B^T W B (LDLT 用)
-        static std::array<double, NUM_BANDS> cachedW;  // 重み (対角行列の対角成分)
+        static std::array<std::array<double, NUM_BANDS>, NUM_BANDS> cachedBtWB;
+        static std::array<double, NUM_BANDS> cachedW;
         static double cachedSampleRate;
         static bool cacheValid;
     };

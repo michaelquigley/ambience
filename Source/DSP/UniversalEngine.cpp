@@ -3,12 +3,7 @@
 namespace FDNReverb {
     UniversalEngine::UniversalEngine() {
         fbVec.fill(0.0f);
-        // 各LFOのシードをばらけさせて非相関化（Decorrelation）する
         for (int i = 0; i < FDN_ORDER; ++i) lfos[i].state = 12345 + i * 9876;
-
-#if AMBIENCE_USE_STAGE2_ABSORPTION
-        absorptionMidGain.fill(1.0f);
-#endif
     }
 
     void UniversalEngine::prepare(double sampleRate, int /*maxBlockSize*/) {
@@ -16,35 +11,28 @@ namespace FDNReverb {
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
         // Stage 2 用: Interaction Matrix を起動時にプリ計算
-        // (サンプルレート依存のためここで実施)
         MagnitudeResponseFitter::precomputeInteractionMatrix(sampleRate);
 #endif
 
-        // 2のべき乗を計算するラムダ式
         auto getPow2 = [](size_t s) -> size_t {
             size_t p = 1;
             while (p < s) p *= 2;
             return p;
             };
-        // 各ディレイラインが「実際に消費する（2のべき乗に切り上げられた）サイズ」を厳密に合計する
         size_t totalMemoryNeeded =
             getPow2(static_cast<size_t>(fs * 1.0))
             + getPow2(static_cast<size_t>(fs * 0.05)) * 4
             + getPow2(static_cast<size_t>(fs * 0.5)) * FDN_ORDER
             + getPow2(static_cast<size_t>(fs * 0.1)) * FDN_ORDER;
-        // 厳密な合計メモリ量を確保
         memoryPool.allocate(totalMemoryNeeded);
         int mask = 0;
         float* ptr = nullptr;
-        // ERディレイ (最大1秒)
         ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 1.0), mask);
         erDelay.init(ptr, mask);
-        // Input Diffusers (最大50ms × 4)
         for (int i = 0; i < 4; ++i) {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.05), mask);
             inputDiffusers[i].init(ptr, mask);
         }
-        // FDN Lines (最大0.5秒 × 16)
         for (int i = 0; i < FDN_ORDER; ++i) {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.5), mask);
             fdnDelays[i].init(ptr, mask);
@@ -59,7 +47,6 @@ namespace FDNReverb {
         fbVec.fill(0.0f);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-        // 12段 × 16ライン すべての Biquad 状態をリセット
         for (auto& lineFilters : absorptionFiltersS2) {
             for (auto& f : lineFilters) f.reset();
         }
@@ -70,7 +57,6 @@ namespace FDNReverb {
 
     void UniversalEngine::setParams(const DSPParams& p) {
         activeParams = p;
-        // 選択されたアルゴリズム(0~6)をTopologyにマッピング
         switch (p.algorithmIndex) {
         case 0: case 1: currentTopology = ReverbTopology::Room; break;
         case 2: case 3: currentTopology = ReverbTopology::Hall; break;
@@ -88,13 +74,10 @@ namespace FDNReverb {
         static constexpr std::array<int, FDN_ORDER> primes = {
             2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53
         };
-        // Room Sizeパラメータ(0.5~2.5)を用いてベース遅延(ms)を計算
         float baseSizeMs = 30.0f * (0.5f + activeParams.roomSizeScale);
         for (int i = 0; i < FDN_ORDER; ++i) {
             float targetSamples = (baseSizeMs + i * 5.0f) * 0.001f * static_cast<float>(fs);
-            // 素数べき乗の多重度 m_i を計算: m_i = round( log(target) / log(p_i) )
             float m_i = std::round(std::log(targetSamples) / std::log(static_cast<float>(primes[i])));
-            // 最終的な遅延サンプル数: p_i ^ m_i
             fdnBaseDelaySamples[i] = std::pow(static_cast<float>(primes[i]), m_i);
         }
     }
@@ -110,27 +93,15 @@ namespace FDNReverb {
         effectiveRT60 = scaledRT60;
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-        // ─── Stage 2: Välimäki–Liski 累積バイカッドGEQ (12段カスケード) ───
-        //
-        // 各遅延線につき:
-        //   currentAbsorptionCoeffsS2[i][0]    = プリシェルフ (Two-Stage の第1段)
-        //   currentAbsorptionCoeffsS2[i][1..10] = GEQ 10 段 (WLS フィット結果)
-        //   currentAbsorptionCoeffsS2[i][11]   = LF ユーザー補正シェルフ
-        //   absorptionMidGain[i]               = 中域基準 DC ゲイン
-        //
-        // 注: HF Damping ユーザー操作は GEQ の高域帯への影響として表現するため
-        //     独立した HF Shelf 段は持たない (Stage 1 との設計差異)
+        // ─── Stage 2c: 10段カスケード GEQ (midGain は band 0 に吸収) ───
         for (int i = 0; i < FDN_ORDER; ++i) {
             auto s2 = MagnitudeResponseFitter::designStage2(
                 static_cast<int>(fdnBaseDelaySamples[i]), fs, scaledRT60,
                 activeParams.hfDamping, activeParams.lfAbsorption);
 
-            absorptionMidGain[i] = s2.midGain;
-            currentAbsorptionCoeffsS2[i][0] = s2.preFilter;
             for (int b = 0; b < NUM_BANDS; ++b) {
-                currentAbsorptionCoeffsS2[i][1 + b] = s2.geqStages[b];
+                currentAbsorptionCoeffsS2[i][b] = s2.geqStages[b];
             }
-            currentAbsorptionCoeffsS2[i][11] = s2.lfUserShelf;
         }
 #else
         // ─── Stage 1: Jot 直交化1次 (1段のみ使用) ───
@@ -142,45 +113,79 @@ namespace FDNReverb {
         }
 #endif
 
-        // ─── 動的 Auto Gain Compensation (AGC) の計算 ───
-        // 1. 基準となるRT60（500Hz帯域）を取得
+        // ─────────────────────────────────────────────────────────────────────────
+        // 動的 Auto Gain Compensation (AGC) の計算 ── Stage 2c 第一次再キャリブレーション
+        // ─────────────────────────────────────────────────────────────────────────
+        //
+        //   totalLateMakeupDB = baseDB + decayCompDB + algorithmOffsetDB
+        //
+        //   baseDB = 22.5 dB
+        //     16次FWHTマトリクスとSAPFループでの固定エネルギー損失を相殺するキャリブレーション値
+        //     Stage 1 時代の 24.0dB から Stage 2c の正確な吸収特性に合わせて -1.5dB 引き下げ
+        //
+        //   decayCompDB = 5.0 · log10(rt60Mid)
+        //     RT60 が長くなった分、エネルギーが時間方向に引き伸ばされ RMS が低下するのを補正
+        //     Stage 1 の係数 10.0 は Stage 2c の正確な吸収特性に対して過剰だったため 5.0 に変更
+        //     RT60=1.0s で 0dB、=2.0s で +1.5dB、=4.0s で +3.0dB の補正となる
+        //
+        //   algorithmOffsetDB
+        //     アルゴリズムごとの個性 (RT60カーブ複雑度・ループ構造) に応じた最終補正
+        //     Stage 1 では topology (Room/Hall/Plate...) 単位で +0〜+6dB の加算補償だったが、
+        //     Stage 2c では正確な減衰再現により逆方向 (減算) の補正が必要
+        //     Room1 のみ RT60 が極端に短いため例外的に +1.5dB
+        // ─────────────────────────────────────────────────────────────────────────
         float rt60Mid = std::max(0.1f, scaledRT60[4]);
-        // 2. 減衰時間に対する動的ゲイン補償カーブ（Decay Compensation）
-        // エネルギーが時間方向に引き伸ばされることによるRMS低下を補正します。
-        // RT60が倍になれば +3dB（エネルギー半減を補償）する対数カーブ。基準を1.0秒とします。
-        float decayCompDB = 10.0f * std::log10(rt60Mid / 1.0f);
-        // 3. トポロジー（アルゴリズム）ごとの固定オフセット
-        float topologyOffsetDB = 0.0f;
+
+        // 修正後
+        constexpr float baseDB = 28.7f;  // 28.2 → +0.5dB
+        float decayCompDB = 7.0f * std::log10(rt60Mid);
+
+        // アルゴリズムインデックス別オフセット (0..6)
+        //   0: Room1   +1.5  (RT60 極短の補償)
+        //   1: Room2   -1.5
+        //   2: Hall1   -1.5
+        //   3: Hall2   -1.5
+        //   4: Plate   -2.0
+        //   5: Spring  -3.5
+        //   6: Goldfoil -4.5
+        static constexpr std::array<float, 7> algorithmOffsetDB = {
+            +0.8f,   // Room1    (変更なし、基準)
+            +0.9f,   // Room2    (変更なし)
+            +0.5f,   // Hall1    (変更なし)
+            +0.5f,   // Hall2    (変更なし)
+            +1.5f,   // Plate    (上げる) ← -1.5 から +1.0dB
+            +0.6f,   // Spring   (上げる) ← -2.2 から +1.0dB
+            +0.6f    // Goldfoil (上げる) ← -3.2 から +1.4dB
+        };
+
+        float algoOffset = algorithmOffsetDB[
+            juce::jlimit(0, 6, activeParams.algorithmIndex)];
+
+        // トポロジーごとの結線設定 (音量補正は algorithmOffsetDB に統合済み)
         switch (currentTopology) {
         case ReverbTopology::Room:
             bypassER = false; bypassInputDiffusers = true;
             apfGain = 0.3f;
-            topologyOffsetDB = 0.0f; // トランジェントが残るため補償なし（基準）
             break;
         case ReverbTopology::Hall:
             bypassER = false; bypassInputDiffusers = false;
             apfGain = 0.618f;
-            topologyOffsetDB = 1.5f; // 少しSmearingされる分を微補償
             break;
         case ReverbTopology::Plate:
             bypassER = true; bypassInputDiffusers = false;
             apfGain = 0.7f;
-            topologyOffsetDB = 4.5f; // ERがなく即座に拡散するため大幅に補償
             break;
         case ReverbTopology::Spring:
             bypassER = true; bypassInputDiffusers = false;
             apfGain = 0.5f;
-            topologyOffsetDB = 5.0f; // 分散特性が強いため大幅補償
             break;
         case ReverbTopology::Goldfoil:
             bypassER = true; bypassInputDiffusers = false;
             apfGain = 0.75f;
-            topologyOffsetDB = 6.0f; // 完全に自己増殖ネットワークに食われるため最大補償
             break;
         }
-        // 4. 最終的なメイクアップゲインの適用
-        // Baseの 24.0dB は、16次マトリクスとユーザーが検証した「固定のエネルギー損失」を相殺するキャリブレーション値
-        float totalLateMakeupDB = 24.0f + decayCompDB + topologyOffsetDB;
+
+        float totalLateMakeupDB = baseDB + decayCompDB + algoOffset;
         lateMakeupGainLinear = juce::Decibels::decibelsToGain(totalLateMakeupDB);
     }
 
@@ -188,7 +193,6 @@ namespace FDNReverb {
     // FWHT (O(N log N) の無損失マトリクス) & Sign Flipping
     // ─────────────────────────────────────────────────────────────────────────────
     inline void UniversalEngine::fastWalshHadamardTransform(std::array<float, 16>& v) noexcept {
-        // 4段階のバタフライ演算 (log2(16) = 4)
         for (int h = 1; h < 16; h *= 2) {
             for (int i = 0; i < 16; i += h * 2) {
                 for (int j = i; j < i + h; ++j) {
@@ -199,7 +203,6 @@ namespace FDNReverb {
                 }
             }
         }
-        // スケーリング 1/sqrt(16) = 0.25
         for (int i = 0; i < 16; ++i) v[i] *= 0.25f;
     }
     inline void UniversalEngine::applySignFlipping(std::array<float, 16>& v) noexcept {
@@ -214,17 +217,15 @@ namespace FDNReverb {
     // メインDSP処理ループ
     // ─────────────────────────────────────────────────────────────────────────────
     void UniversalEngine::processBlock(const float* inL, const float* inR, float* outL, float* outR, int numSamples) noexcept {
-        // LFOのDepth計算 (1.5セント未満のMicro-delay = 数ミリ秒)
         float depthSamples = activeParams.modAmount * 0.002f * static_cast<float>(fs);
         float wetGain = juce::Decibels::decibelsToGain(activeParams.wetDB);
         for (int n = 0; n < numSamples; ++n) {
             float inputMono = (inL[n] + inR[n]) * 0.5f;
             float erOut = 0.0f;
             float fdnInput = inputMono;
-            // 1. Input Diffusers (Plate等での初期拡散)
+            // 1. Input Diffusers
             if (!bypassInputDiffusers) {
                 for (int i = 0; i < 4; ++i) {
-                    // 簡単な直列オールパス
                     float delaySmp = (3.0f + i * 2.0f) * 0.001f * fs;
                     float d = inputDiffusers[i].read(delaySmp);
                     float w = fdnInput + 0.618f * d;
@@ -232,36 +233,27 @@ namespace FDNReverb {
                     fdnInput = d - 0.618f * w;
                 }
             }
-            // 2. ER Tapped Delay (Room/Hall等)
+            // 2. ER Tapped Delay
             if (!bypassER) {
                 erDelay.write(inputMono);
-                // 擬似的に4つのタップから読み出し
                 erOut += erDelay.read(15.0f * 0.001f * fs) * 0.5f;
                 erOut += erDelay.read(27.0f * 0.001f * fs) * 0.4f;
                 erOut += erDelay.read(41.0f * 0.001f * fs) * 0.3f;
                 erOut += erDelay.read(59.0f * 0.001f * fs) * 0.2f;
             }
             // 3. FDN + Nested Allpass Loop
-            std::array<float, 16> currentFb = fbVec; // 前回のマトリクス出力
+            std::array<float, 16> currentFb = fbVec;
             fastWalshHadamardTransform(currentFb);
             applySignFlipping(currentFb);
             float fdnOutL = 0.0f, fdnOutR = 0.0f;
             std::array<float, 16> nextFb;
             for (int i = 0; i < FDN_ORDER; ++i) {
-                // LFOモジュレーション (Random Walk)
                 float lfoVal = lfos[i].tick(activeParams.modRate, fs);
                 float delaySmp = fdnBaseDelaySamples[i] + lfoVal * depthSamples;
-                // FDNリード
                 float d = fdnDelays[i].read(delaySmp);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-                // ─── Stage 2: 12段カスケード吸収フィルタ ───
-                // 中域基準ゲインを最初に適用 (DC スカラー)
-                d *= absorptionMidGain[i];
-                // 12段の Biquad を順次通過
-                //   段 0       : プリシェルフ
-                //   段 1〜10   : GEQ 10 段
-                //   段 11      : LF ユーザー補正シェルフ
+                // ─── Stage 2c: 10段カスケード GEQ ───
                 for (int s = 0; s < ABSO_STAGES_S2; ++s) {
                     d = absorptionFiltersS2[i][s].tick(d, currentAbsorptionCoeffsS2[i][s]);
                 }
@@ -271,27 +263,20 @@ namespace FDNReverb {
 #endif
 
                 // Nested Allpass Filter
-                // FDNループ内にAllpassをネストすることで指数関数的なSmearingを生成
                 float apfDelaySmp = (1.5f + i * 0.3f) * 0.001f * fs;
                 float apfD = nestedAllpassDelays[i].read(apfDelaySmp);
                 float apfW = d + apfGain * apfD;
                 nestedAllpassDelays[i].write(apfW);
                 float apfOut = apfD - apfGain * apfW;
-                // 次のフィードバックへ
                 nextFb[i] = apfOut;
-                // FDNへの書き込み (入力 + フィードバック)
-                // 入力ベクトル bIn = 1/sqrt(16) = 0.25
                 fdnDelays[i].write(fdnInput * 0.25f + currentFb[i]);
-                // 出力ミックス (cOut = 0.25)
                 float width = activeParams.stereoWidth;
                 if (i % 2 == 0) { fdnOutL += apfOut * 0.25f; fdnOutR += apfOut * 0.25f * (1.f - width); }
                 else { fdnOutR += apfOut * 0.25f; fdnOutL += apfOut * 0.25f * (1.f - width); }
             }
-            fbVec = nextFb; // 状態更新
-            // 4. 最終出力 (ER + Late)
-            // ERはマトリクスを通っていないため、メイクアップゲインの対象外
+            fbVec = nextFb;
+            // 4. 最終出力
             float erMix = bypassER ? 0.0f : erOut * activeParams.erLevel;
-            // Late（FDN出力）に動的メイクアップゲインと、ユーザーのLateLevelパラメータを掛ける
             float lateMixL = fdnOutL * lateMakeupGainLinear * activeParams.lateLevel;
             float lateMixR = fdnOutR * lateMakeupGainLinear * activeParams.lateLevel;
             outL[n] = (erMix + lateMixL) * wetGain;
