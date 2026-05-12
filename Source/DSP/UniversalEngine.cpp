@@ -7,7 +7,9 @@ namespace FDNReverb {
     // ─────────────────────────────────────────────────────────────────────────────
     UniversalEngine::UniversalEngine() {
         fbVec.fill(0.0f);
-        for (int i = 0; i < FDN_ORDER; ++i) lfos[i].state = 12345 + i * 9876;
+        for (int i = 0; i < FDN_ORDER; ++i) {
+            lfos[i].state = 12345 + i * 9876;
+        }
     }
 
     void UniversalEngine::prepare(double sampleRate, int /*maxBlockSize*/) {
@@ -24,11 +26,13 @@ namespace FDNReverb {
             while (p < s) p *= 2;
             return p;
             };
+
         size_t totalMemoryNeeded =
             getPow2(static_cast<size_t>(fs * 1.0))
             + getPow2(static_cast<size_t>(fs * 0.05)) * 4
             + getPow2(static_cast<size_t>(fs * 0.5)) * FDN_ORDER
             + getPow2(static_cast<size_t>(fs * 0.1)) * FDN_ORDER;
+
         memoryPool.allocate(totalMemoryNeeded);
 
         // ── 遅延ラインの割り当て ──
@@ -42,9 +46,11 @@ namespace FDNReverb {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.05), mask);
             inputDiffusers[i].init(ptr, mask);
         }
+
         for (int i = 0; i < FDN_ORDER; ++i) {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.5), mask);
             fdnDelays[i].init(ptr, mask);
+
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.1), mask);
             nestedAllpassDelays[i].init(ptr, mask);
         }
@@ -80,10 +86,10 @@ namespace FDNReverb {
     void UniversalEngine::setParams(const DSPParams& p) {
         activeParams = p;
         switch (p.algorithmIndex) {
-        case 0: case 1: currentTopology = ReverbTopology::Room; break;
-        case 2: case 3: currentTopology = ReverbTopology::Hall; break;
-        case 4:         currentTopology = ReverbTopology::Plate; break;
-        case 5:         currentTopology = ReverbTopology::Spring; break;
+        case 0: case 1: currentTopology = ReverbTopology::Room;     break;
+        case 2: case 3: currentTopology = ReverbTopology::Hall;     break;
+        case 4:         currentTopology = ReverbTopology::Plate;    break;
+        case 5:         currentTopology = ReverbTopology::Spring;   break;
         case 6:         currentTopology = ReverbTopology::Goldfoil; break;
         }
         updateTopologyAndRouting();
@@ -96,6 +102,7 @@ namespace FDNReverb {
         static constexpr std::array<int, FDN_ORDER> primes = {
             2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53
         };
+
         float baseSizeMs = 30.0f * (0.5f + activeParams.roomSizeScale);
         for (int i = 0; i < FDN_ORDER; ++i) {
             float targetSamples = (baseSizeMs + i * 5.0f) * 0.001f * static_cast<float>(fs);
@@ -109,6 +116,7 @@ namespace FDNReverb {
     // ─────────────────────────────────────────────────────────────────────────────
     void UniversalEngine::updateTopologyAndRouting() {
         calculatePrimePowerDelays();
+
         auto& preset = *ALL_PRESETS[activeParams.algorithmIndex];
 
         // ── RT60 スケーリング ──
@@ -192,7 +200,6 @@ namespace FDNReverb {
                 * static_cast<float>(fs) * erSizeScale;
             currentERGains[i] = erPattern.taps[i].gain;
         }
-
         if (erPattern.numTaps == 0) bypassER = true;
 
         // ─────────────────────────────────────────────────────────────────────────
@@ -209,7 +216,7 @@ namespace FDNReverb {
         theoreticalEDT = rt60Mid * edtCoeff;
 
         // ─────────────────────────────────────────────────────────────────────────
-        //  Saturator 設定 (プリセット別の倍音特性 + OS 倍率)
+        //  Saturator 設定 (プリセット別の倍音特性 + Mode 切替)
         // ─────────────────────────────────────────────────────────────────────────
         // ─ プリセット別サチュレーション強度 ─
         // Plate/Spring/Goldfoil は金属系で強めの倍音、Room/Hall は控えめ
@@ -221,22 +228,18 @@ namespace FDNReverb {
         case ReverbTopology::Spring:   saturationMultiplier = 1.2f; break;
         case ReverbTopology::Goldfoil: saturationMultiplier = 1.1f; break;
         }
+
         float effectiveSatAmount = activeParams.saturation * saturationMultiplier;
         effectiveSatAmount = juce::jlimit(0.0f, 1.0f, effectiveSatAmount);
 
         saturatorL.setAmount(effectiveSatAmount);
         saturatorR.setAmount(effectiveSatAmount);
 
-        // ─ Oversampling 倍率の設定 ─
-        // oversamplingIdx: 0=1x, 1=2x, 2=4x, 3=8x (8x は 4x にクリップ)
-        int osIdx = juce::jlimit(0, 3, activeParams.oversamplingIdx);
-        int osFactor = 1;
-        if (osIdx == 0) osFactor = 1;
-        else if (osIdx == 1) osFactor = 2;
-        else                 osFactor = 4;  // 4x または 8x → 4x
-
-        saturatorL.setOversamplingFactor(osFactor);
-        saturatorR.setOversamplingFactor(osFactor);
+        // ─ Saturation Type の反映 (ProMode の SatType セレクタ値) ─
+        // 0=Warm / 1=Tape / 2=Tube / 3=Hard
+        // setMode 内でモード変化があれば履歴を reset() する (クリック防止)
+        saturatorL.setMode(activeParams.satTypeIdx);
+        saturatorR.setMode(activeParams.satTypeIdx);
 
         // ── 最終ゲイン補正 ──
         float totalLateMakeupDB = baseDB + decayCompDB + algoOffset;
@@ -319,7 +322,7 @@ namespace FDNReverb {
                 erOutR = erTotalR;
             }
 
-            // ── 3. FDN + Nested Allpass Loop ──
+            // ── 3. FDN + Nested Allpass Loop (16ch) ──
             std::array<float, 16> currentFb = fbVec;
             fastWalshHadamardTransform(currentFb);
             applySignFlipping(currentFb);
@@ -333,7 +336,7 @@ namespace FDNReverb {
                 float delaySmp = fdnBaseDelaySamples[i] + lfoVal * depthSamples;
                 float d = fdnDelays[i].read(delaySmp);
 
-                // 吸収フィルタ
+                // 吸収フィルタ (Stage 2c: 10段 GEQ)
 #if AMBIENCE_USE_STAGE2_ABSORPTION
                 for (int s = 0; s < ABSO_STAGES_S2; ++s) {
                     d = absorptionFiltersS2[i][s].tick(d, currentAbsorptionCoeffsS2[i][s]);
@@ -367,7 +370,7 @@ namespace FDNReverb {
                 }
             }
 
-            // 正規化 (8ch ずつ)
+            // 正規化: 16ch のうち L 寄り 8ch / R 寄り 8ch なので 1/8 = 0.125
             fdnOutL *= 0.125f;
             fdnOutR *= 0.125f;
             fbVec = nextFb;
@@ -382,10 +385,11 @@ namespace FDNReverb {
             float wetMono = (lateMixL + lateMixR) * 0.5f;
             acousticMetrics.processSample(wetMono);
 
-            // ── 5. Saturation 適用 (Late のみ、OS 内蔵) ──
+            // ── 5. Saturation 適用 (Late のみ、Mode 切替対応) ──
             // 資料の Valhalla 知見: FDN ループ出力段にサチュレーションを配置することで
             // フィードバックを通じて倍音が蓄積し、「Spectral Plasma」が形成される。
-            // Saturator は内部で 1x/2x/4x OS を自動切替してエイリアスを抑制する。
+            // SaturationMode に応じて Warm/Tape/Tube/Hard が選択される (ProMode 専用)。
+            // FDN ループ内 HF Damping がエイリアスを反復的に除去するため OS は不要。
             float satL = saturatorL.processSample(lateMixL);
             float satR = saturatorR.processSample(lateMixR);
 
