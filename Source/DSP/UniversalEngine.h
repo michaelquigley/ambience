@@ -7,6 +7,7 @@
 #include "../PluginParameters.h"
 #include <array>
 #include <random>
+#include "OutputLimiter.h"
 
 #define AMBIENCE_USE_STAGE2_ABSORPTION 1
 
@@ -83,6 +84,18 @@ namespace FDNReverb {
         inline void fastWalshHadamardTransform(std::array<float, 16>& v) noexcept;
         inline void applySignFlipping(std::array<float, 16>& v) noexcept;
 
+        // ─── FDN ループ内マイクロサチュレーション (Layer 1, 内部固定) ───
+//   Padé 有理多項式 x(27+x²)/(27+9x²)
+//   - クランプ x ∈ [-3, 3]
+//   - パッシブ安定性の保証 (リミットサイクル消滅)
+//   - HF Damping が後続でエイリアスを除去するため OS 不要
+        inline static float processMicroSaturation(float x) noexcept {
+            if (x > 3.0f) return  1.0f;
+            if (x < -3.0f) return -1.0f;
+            const float xsq = x * x;
+            return x * (27.0f + xsq) / (27.0f + 9.0f * xsq);
+        }
+
         // ── 基本パラメータ ──
         DelayMemoryPool memoryPool;
         double fs{ 48000.0 };
@@ -101,6 +114,14 @@ namespace FDNReverb {
         int currentERTapCount{ 0 };
         std::array<float, MAX_ER_TAPS> currentERDelaySamples;
         std::array<float, MAX_ER_TAPS> currentERGains;
+
+        // ─── Phase 3-1 新規追加 ───
+        OutputLimiter outputLimiter;                // 出力段リミッター
+
+        // Ducking 用エンベロープフォロワー
+        float duckingEnvelope{ 0.0f };
+        float duckingAttackCoeff{ 0.0f };
+        float duckingReleaseCoeff{ 0.0f };
 
         // ── 吸収フィルタ ──
 #if AMBIENCE_USE_STAGE2_ABSORPTION
