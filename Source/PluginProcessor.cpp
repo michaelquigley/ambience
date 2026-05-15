@@ -11,33 +11,32 @@ FDNReverbAudioProcessor::FDNReverbAudioProcessor()
 {
 }
 
-void FDNReverbAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+void FDNReverbAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+{
     int osIdx = 0;
     oversampler = std::make_unique<juce::dsp::Oversampling<float>>(
         2, osIdx,
-        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
-        true);
+        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true);
     oversampler->initProcessing(static_cast<size_t>(samplesPerBlock));
 
-    double osSampleRate = sampleRate;
-    int osBlockSize = samplesPerBlock;
+    engine.prepare(sampleRate, samplesPerBlock);
 
-    engine.prepare(osSampleRate, osBlockSize);
-
-    wetBuffer.setSize(2, osBlockSize);
+    wetBuffer.setSize(2, samplesPerBlock);
     smoothWetGain.reset(sampleRate, 0.05);
     smoothDryGain.reset(sampleRate, 0.05);
 
     lastSampleRate = sampleRate;
+    paramsNeedUpdate = true;  // prepareToPlay 後は必ず再送
 }
 
-void FDNReverbAudioProcessor::updateEngineParams() {
+void FDNReverbAudioProcessor::updateEngineParams()
+{
     int currentAlgo = (int)*apvts.getRawParameterValue(ParamID::Algorithm);
     if (currentAlgo != lastAlgorithmIndex) {
-        if (lastAlgorithmIndex >= 0) {
+        if (lastAlgorithmIndex >= 0)
             loadPresetDefaults(currentAlgo);
-        }
         lastAlgorithmIndex = currentAlgo;
+        paramsNeedUpdate = true;
     }
 
     DSPParams p;
@@ -54,7 +53,7 @@ void FDNReverbAudioProcessor::updateEngineParams() {
     p.modAmount = *apvts.getRawParameterValue(ParamID::ModAmount);
     p.modRate = *apvts.getRawParameterValue(ParamID::ModRate);
     p.stereoWidth = *apvts.getRawParameterValue(ParamID::StereoWidth);
-    p.crossFeed = *apvts.getRawParameterValue(ParamID::CrossFeed);
+    // ★ crossFeed 削除
     p.erLevel = *apvts.getRawParameterValue(ParamID::ERLevel);
     p.saturation = *apvts.getRawParameterValue(ParamID::Saturation);
     p.wetDB = *apvts.getRawParameterValue(ParamID::WetLevel);
@@ -63,13 +62,8 @@ void FDNReverbAudioProcessor::updateEngineParams() {
     p.duckingAttackMs = *apvts.getRawParameterValue(ParamID::DuckAttack);
     p.duckingRelMs = *apvts.getRawParameterValue(ParamID::DuckRelease);
     p.duckingThreshDB = *apvts.getRawParameterValue(ParamID::DuckThresh);
-
     p.satTypeIdx = (int)*apvts.getRawParameterValue(ParamID::SatType);
-
-    // ─── Phase 3-1 追加: ER Solo ───
     p.erSolo = (*apvts.getRawParameterValue(ParamID::ERSolo)) > 0.5f;
-
-    // ─── Phase 4 追加: ProMode + Tilt EQ + 帯域別 RT60 ───
     p.proMode = (*apvts.getRawParameterValue(ParamID::ProMode)) > 0.5f;
     p.tiltLow = *apvts.getRawParameterValue(ParamID::TiltLow);
     p.tiltMid = *apvts.getRawParameterValue(ParamID::TiltMid);
@@ -89,10 +83,28 @@ void FDNReverbAudioProcessor::updateEngineParams() {
     smoothWetGain.setTargetValue(juce::Decibels::decibelsToGain(p.wetDB));
     smoothDryGain.setTargetValue(juce::Decibels::decibelsToGain(p.dryDB));
 
-    engine.setParams(p);
+    // ─────────────────────────────────────────────────────────────────────────
+    //  ダーティフラグによる負荷軽減
+    // ─────────────────────────────────────────────────────────────────────────
+    //  DSPParams が前回から変化していない場合、setParams() をスキップする。
+    //  setParams() → updateTopologyAndRouting() → designStage2() × 16 ch は
+    //  10×10 LDLT 行列演算を含む重い処理。パラメータが静止していれば不要。
+    //
+    //  paramsNeedUpdate は以下のタイミングで true になる:
+    //    - prepareToPlay() 後
+    //    - アルゴリズム切替時
+    //    - 上記以外に DSPParams の値が変化したとき (operator!= で検出)
+    // ─────────────────────────────────────────────────────────────────────────
+    if (paramsNeedUpdate || p != lastSentParams) {
+        engine.setParams(p);
+        lastSentParams = p;
+        paramsNeedUpdate = false;
+    }
 }
 
-void FDNReverbAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
+void FDNReverbAudioProcessor::processBlock(
+    juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
     juce::ScopedNoDenormals noDenormals;
 
     updateEngineParams();
@@ -113,9 +125,10 @@ void FDNReverbAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juc
     for (int i = 0; i < numSamples; ++i) {
         float w = smoothWetGain.getNextValue();
         float d = smoothDryGain.getNextValue();
-
-        osBlock.setSample(0, i, osBlock.getSample(0, i) * d + wetBuffer.getSample(0, i) * w);
-        osBlock.setSample(1, i, osBlock.getSample(1, i) * d + wetBuffer.getSample(1, i) * w);
+        osBlock.setSample(0, i, osBlock.getSample(0, i) * d
+            + wetBuffer.getSample(0, i) * w);
+        osBlock.setSample(1, i, osBlock.getSample(1, i) * d
+            + wetBuffer.getSample(1, i) * w);
     }
 
     oversampler->processSamplesDown(block);
@@ -134,6 +147,7 @@ void FDNReverbAudioProcessor::setStateInformation(const void* d, int s) {
     std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(d, s));
     if (xml && xml->hasTagName(apvts.state.getType())) {
         apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        paramsNeedUpdate = true;  // セッションロード後は必ず再送
     }
 }
 
@@ -149,12 +163,10 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex)
 
     auto setParam = [this](const juce::String& paramID, float value) {
         if (auto* param = apvts.getParameter(paramID)) {
-            float normalizedValue = param->convertTo0to1(value);
-            param->setValueNotifyingHost(normalizedValue);
+            param->setValueNotifyingHost(param->convertTo0to1(value));
         }
         };
 
-    // ─── Normal Mode パラメータ ───
     setParam(ParamID::RoomSize, def.roomSize);
     setParam(ParamID::DecayTime, def.decayTime);
     setParam(ParamID::HFDamping, def.hfDamp);
@@ -165,9 +177,7 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex)
     setParam(ParamID::ERLevel, def.erLevel);
     setParam(ParamID::Saturation, def.saturation);
 
-    // ─── ProMode 帯域ノブ: アルゴリズム切替時に 1.0 にリセット ───
-    // 新しいアルゴリズムの音響特性をフラットな状態から調整できるよう、
-    // 前のアルゴリズムで設定した帯域ごとの RT60 調整と Tilt EQ を白紙に戻す。
+    // ProMode 帯域ノブをフラットにリセット
     setParam(ParamID::RTBand0, 1.0f);
     setParam(ParamID::RTBand1, 1.0f);
     setParam(ParamID::RTBand2, 1.0f);
@@ -181,6 +191,8 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex)
     setParam(ParamID::TiltLow, 1.0f);
     setParam(ParamID::TiltMid, 1.0f);
     setParam(ParamID::TiltHigh, 1.0f);
+
+    paramsNeedUpdate = true;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {

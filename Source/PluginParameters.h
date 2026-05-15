@@ -19,7 +19,7 @@ namespace FDNReverb {
         inline const juce::String ModAmount = "modamount";
         inline const juce::String ModRate = "modrate";
         inline const juce::String StereoWidth = "stereowidth";
-        inline const juce::String CrossFeed = "crossfeed";
+        // ★ CrossFeed 廃止 (v1.2)
         inline const juce::String ERLevel = "erlevel";
         inline const juce::String Saturation = "saturation";
         inline const juce::String SatType = "sattype";
@@ -29,27 +29,21 @@ namespace FDNReverb {
         inline const juce::String DuckAttack = "duckattack";
         inline const juce::String DuckRelease = "duckrelease";
         inline const juce::String DuckThresh = "duckthresh";
-
-        // ─── Phase 3-1 追加 ───
-        inline const juce::String ERSolo = "ersolo";    // ER ソロ機能
-
-        // ─── Phase 4 追加 (ProMode) ───
-        inline const juce::String ProMode = "promode";   // ProMode 切り替え
-        inline const juce::String TiltLow = "tiltlow";   // Tilt EQ 低域
-        inline const juce::String TiltMid = "tiltmid";   // Tilt EQ 中域
-        inline const juce::String TiltHigh = "tilthigh";  // Tilt EQ 高域
-
-        // RT60 帯域別ノブ x10 (31Hz ~ 16kHz)
-        inline const juce::String RTBand0 = "rtband0";   // 31.25 Hz
-        inline const juce::String RTBand1 = "rtband1";   // 62.5 Hz
-        inline const juce::String RTBand2 = "rtband2";   // 125 Hz
-        inline const juce::String RTBand3 = "rtband3";   // 250 Hz
-        inline const juce::String RTBand4 = "rtband4";   // 500 Hz
-        inline const juce::String RTBand5 = "rtband5";   // 1 kHz
-        inline const juce::String RTBand6 = "rtband6";   // 2 kHz
-        inline const juce::String RTBand7 = "rtband7";   // 4 kHz
-        inline const juce::String RTBand8 = "rtband8";   // 8 kHz
-        inline const juce::String RTBand9 = "rtband9";   // 16 kHz
+        inline const juce::String ERSolo = "ersolo";
+        inline const juce::String ProMode = "promode";
+        inline const juce::String TiltLow = "tiltlow";
+        inline const juce::String TiltMid = "tiltmid";
+        inline const juce::String TiltHigh = "tilthigh";
+        inline const juce::String RTBand0 = "rtband0";
+        inline const juce::String RTBand1 = "rtband1";
+        inline const juce::String RTBand2 = "rtband2";
+        inline const juce::String RTBand3 = "rtband3";
+        inline const juce::String RTBand4 = "rtband4";
+        inline const juce::String RTBand5 = "rtband5";
+        inline const juce::String RTBand6 = "rtband6";
+        inline const juce::String RTBand7 = "rtband7";
+        inline const juce::String RTBand8 = "rtband8";
+        inline const juce::String RTBand9 = "rtband9";
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -66,10 +60,10 @@ namespace FDNReverb {
         float modAmount{ 0.25f };
         float modRate{ 0.5f };
         float stereoWidth{ 0.80f };
-        float crossFeed{ 0.15f };
+        // ★ crossFeed 廃止 (v1.2)
         float erLevel{ 0.6f };
         float lateLevel{ 1.0f };
-        float wetDB{ -6.0f };
+        float wetDB{ -12.0f };
         float dryDB{ 0.0f };
         float saturation{ 0.0f };
         int   satTypeIdx{ 0 };
@@ -77,17 +71,44 @@ namespace FDNReverb {
         float duckingAttackMs{ 10.0f };
         float duckingRelMs{ 200.0f };
         float duckingThreshDB{ -20.0f };
-
-        // ─── Phase 3-1 追加 ───
         bool  erSolo{ false };
-
-        // ─── Phase 4 追加 (ProMode) ───
         bool  proMode{ false };
-        float tiltLow{ 1.0f };  // 0.5 ~ 2.0 (1.0 = neutral)
+        float tiltLow{ 1.0f };
         float tiltMid{ 1.0f };
         float tiltHigh{ 1.0f };
         std::array<float, 10> rtBands{ { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
                                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
+
+        // ダーティフラグ比較用: 全フィールドが一致するか
+        bool operator==(const DSPParams& o) const noexcept {
+            return algorithmIndex == o.algorithmIndex
+                && decayScale == o.decayScale
+                && roomSizeScale == o.roomSizeScale
+                && hfDamping == o.hfDamping
+                && lfAbsorption == o.lfAbsorption
+                && diffusion == o.diffusion
+                && preDelayMs == o.preDelayMs
+                && modAmount == o.modAmount
+                && modRate == o.modRate
+                && stereoWidth == o.stereoWidth
+                && erLevel == o.erLevel
+                && lateLevel == o.lateLevel
+                && wetDB == o.wetDB
+                && dryDB == o.dryDB
+                && saturation == o.saturation
+                && satTypeIdx == o.satTypeIdx
+                && duckingAmount == o.duckingAmount
+                && duckingAttackMs == o.duckingAttackMs
+                && duckingRelMs == o.duckingRelMs
+                && duckingThreshDB == o.duckingThreshDB
+                && erSolo == o.erSolo
+                && proMode == o.proMode
+                && tiltLow == o.tiltLow
+                && tiltMid == o.tiltMid
+                && tiltHigh == o.tiltHigh
+                && rtBands == o.rtBands;
+        }
+        bool operator!=(const DSPParams& o) const noexcept { return !(*this == o); }
     };
 
     class ParameterHelper {
