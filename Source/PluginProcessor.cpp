@@ -141,7 +141,8 @@ juce::AudioProcessorEditor* FDNReverbAudioProcessor::createEditor() {
     return new FDNReverbEditor(*this);
 }
 
-void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex) {
+void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex)
+{
     if (algorithmIndex < 0 || algorithmIndex >= 7) return;
 
     const auto& def = PRESET_DEFAULTS[algorithmIndex];
@@ -153,6 +154,7 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex) {
         }
         };
 
+    // ─── Normal Mode パラメータ ───
     setParam(ParamID::RoomSize, def.roomSize);
     setParam(ParamID::DecayTime, def.decayTime);
     setParam(ParamID::HFDamping, def.hfDamp);
@@ -161,7 +163,24 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex) {
     setParam(ParamID::ModAmount, def.modAmount);
     setParam(ParamID::ModRate, def.modRate);
     setParam(ParamID::ERLevel, def.erLevel);
-    setParam(ParamID::Saturation, def.saturation);  // saturation も同期
+    setParam(ParamID::Saturation, def.saturation);
+
+    // ─── ProMode 帯域ノブ: アルゴリズム切替時に 1.0 にリセット ───
+    // 新しいアルゴリズムの音響特性をフラットな状態から調整できるよう、
+    // 前のアルゴリズムで設定した帯域ごとの RT60 調整と Tilt EQ を白紙に戻す。
+    setParam(ParamID::RTBand0, 1.0f);
+    setParam(ParamID::RTBand1, 1.0f);
+    setParam(ParamID::RTBand2, 1.0f);
+    setParam(ParamID::RTBand3, 1.0f);
+    setParam(ParamID::RTBand4, 1.0f);
+    setParam(ParamID::RTBand5, 1.0f);
+    setParam(ParamID::RTBand6, 1.0f);
+    setParam(ParamID::RTBand7, 1.0f);
+    setParam(ParamID::RTBand8, 1.0f);
+    setParam(ParamID::RTBand9, 1.0f);
+    setParam(ParamID::TiltLow, 1.0f);
+    setParam(ParamID::TiltMid, 1.0f);
+    setParam(ParamID::TiltHigh, 1.0f);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {
