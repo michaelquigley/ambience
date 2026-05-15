@@ -5,7 +5,8 @@
 #include "GUI/AmbienceUI.h"
 #include "GUI/DecayCurveViz.h"
 
-class FDNReverbEditor : public juce::AudioProcessorEditor, private juce::Timer
+class FDNReverbEditor : public juce::AudioProcessorEditor,
+    private juce::Timer
 {
 public:
     explicit FDNReverbEditor(FDNReverbAudioProcessor&);
@@ -16,14 +17,38 @@ public:
 
 private:
     void timerCallback() override;
+    void updatePanelVisibility();
 
     FDNReverbAudioProcessor& audioProcessor;
     AmbienceLookAndFeel laf;
 
-    // ─── GUI Components ───────────────────────────────────────────────────
-
+    // ─── 共通 (常時表示) ────────────────────────────────────────────
     AlgorithmSelector algoSelector;
+    RT60Visualizer    rt60Viz;
+    DecayCurveViz     decayCurveViz;
+    VUMeter           vuIn, vuOut;
+    juce::Label       titleLabel;
 
+    // AcousticMetrics 表示ラベル
+    juce::Label labelMetricsTitle;
+    juce::Label labelD50Caption, labelD50Value;
+    juce::Label labelC50Caption, labelC50Value;
+    juce::Label labelC80Caption, labelC80Value;
+    juce::Label labelEDTCaption, labelEDTValue;
+
+    // ─── ProMode / ER SOLO ボタン (常時表示) ────────────────────────
+    //   配置: ヘッダー行 (タイトル右隣)
+    juce::TextButton proModeButton;   // "PRO" トグルボタン
+    juce::TextButton erSoloButton;    // "ER SOLO" トグルボタン (青系)
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        proModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
+        erSoloAttachment;
+
+    // ProMode の状態キャッシュ（timerCallback で更新）
+    bool isProMode{ false };
+
+    // ─── Normal Mode ノブ (ProMode 時は非表示) ──────────────────────
     ArcKnob kPreDelay, kRoomSize, kDecay;
     ArcKnob kHFDamp, kLFAbsorb;
     ArcKnob kDiffusion, kModAmt, kModRate;
@@ -32,38 +57,26 @@ private:
     ArcKnob kWet, kDry;
     ArcKnob kDuckAmt, kDuckThr, kDuckAtt, kDuckRel;
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  ★ 削除: oversamplingCombo, oversamplingLabel, osAttachment
-    //    （v1.1.0 で Oversampling パラメータを廃止）
-    // ────────────────────────────────────────────────────────────────────────
-    // juce::ComboBox oversamplingCombo;
-    // juce::Label oversamplingLabel;
-    // std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> osAttachment;
+    // ─── ProMode パネル (Normal Mode 時は非表示) ────────────────────
 
-    RT60Visualizer rt60Viz;
-    VUMeter vuIn, vuOut;
-    juce::Label titleLabel;
+    // 1段目: RT60 帯域別ノブ × 10 (31Hz〜16kHz)
+    std::array<ArcKnob, 10> kRTBands;
 
-    // ─── AcousticMetrics 表示用ラベル ───
-    juce::Label labelMetricsTitle;  // セクションタイトル "ACOUSTICS"
-    juce::Label labelD50Caption, labelD50Value;
-    juce::Label labelC50Caption, labelC50Value;
-    juce::Label labelC80Caption, labelC80Value;
-    juce::Label labelEDTCaption, labelEDTValue;
+    // 2段目: SatType コンボ + Tilt EQ ノブ × 3 (左寄せ)
+    juce::Label   satTypeLabel;
+    juce::ComboBox satTypeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
+        satTypeAttachment;
+    ArcKnob kTiltLow, kTiltMid, kTiltHigh;
 
-    // Layout constants
-    static constexpr int W = 900, H = 540, PAD = 8;
-    static constexpr int KNOB_W = 64, KNOB_H = 72, KNOB_LBL_H = 14, UNIT_H = 88;
-
-    DecayCurveViz decayCurveViz;
-
-    // ────────────────────────────────────────────────────────────────────────
-    //  ★ 将来計画 (Phase 4): ProMode の SatType セレクタ
-    //    Phase 2 完了後に下記を追加予定。
-    //    - juce::ComboBox satTypeCombo;
-    //    - std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> satTypeAttachment;
-    //    - ProMode 専用の setVisible(isProMode) ロジック
-    // ────────────────────────────────────────────────────────────────────────
+    // ─── Layout 定数 ────────────────────────────────────────────────
+    static constexpr int W = 900;
+    static constexpr int H = 540;
+    static constexpr int PAD = 8;
+    static constexpr int KNOB_W = 64;
+    static constexpr int KNOB_H = 72;
+    static constexpr int KNOB_LBL_H = 14;
+    static constexpr int UNIT_H = 88;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FDNReverbEditor)
 };
