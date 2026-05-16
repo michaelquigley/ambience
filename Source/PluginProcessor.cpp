@@ -3,6 +3,17 @@
 
 using namespace FDNReverb;
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ★ Step A: Wet の内部オフセット
+// ─────────────────────────────────────────────────────────────────────────────
+//   ユーザー表示は -60〜0dB だが、Wet 最大は実効的に -3dB にしたい。
+//   理由: Wet=0dB だと FDN の makeup ゲインと合わさり OutputLimiter が
+//         連続作動して音が割れる。-3dB のヘッドルームが必要。
+//   実装: APVTS から取った値に -3dB を加算 (= 0.708 倍) するのではなく、
+//         Decibels::decibelsToGain 後に乗算する形が数値的に安全。
+// ─────────────────────────────────────────────────────────────────────────────
+static constexpr float kWetInternalOffsetDB = -3.0f;
+
 FDNReverbAudioProcessor::FDNReverbAudioProcessor()
     : AudioProcessor(BusesProperties()
         .withInput("Input", juce::AudioChannelSet::stereo(), true)
@@ -26,7 +37,7 @@ void FDNReverbAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
     smoothDryGain.reset(sampleRate, 0.05);
 
     lastSampleRate = sampleRate;
-    paramsNeedUpdate = true;  // prepareToPlay 後は必ず再送
+    paramsNeedUpdate = true;
 }
 
 void FDNReverbAudioProcessor::updateEngineParams()
@@ -53,7 +64,6 @@ void FDNReverbAudioProcessor::updateEngineParams()
     p.modAmount = *apvts.getRawParameterValue(ParamID::ModAmount);
     p.modRate = *apvts.getRawParameterValue(ParamID::ModRate);
     p.stereoWidth = *apvts.getRawParameterValue(ParamID::StereoWidth);
-    // ★ crossFeed 削除
     p.erLevel = *apvts.getRawParameterValue(ParamID::ERLevel);
     p.saturation = *apvts.getRawParameterValue(ParamID::Saturation);
     p.wetDB = *apvts.getRawParameterValue(ParamID::WetLevel);
@@ -80,26 +90,15 @@ void FDNReverbAudioProcessor::updateEngineParams()
     p.rtBands[8] = *apvts.getRawParameterValue(ParamID::RTBand8);
     p.rtBands[9] = *apvts.getRawParameterValue(ParamID::RTBand9);
 
-    // ★ Phase 5: Output EQ
     p.loCutHz = *apvts.getRawParameterValue(ParamID::LoCut);
     p.hiCutHz = *apvts.getRawParameterValue(ParamID::HiCut);
 
-    smoothWetGain.setTargetValue(juce::Decibels::decibelsToGain(p.wetDB));
-
+    // ★ Step A: Wet に内部 -3dB オフセットを適用
+    // ユーザー操作は -60〜0dB、実効値は -63〜-3dB となる。
+    smoothWetGain.setTargetValue(
+        juce::Decibels::decibelsToGain(p.wetDB + kWetInternalOffsetDB));
     smoothDryGain.setTargetValue(juce::Decibels::decibelsToGain(p.dryDB));
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ダーティフラグによる負荷軽減
-    // ─────────────────────────────────────────────────────────────────────────
-    //  DSPParams が前回から変化していない場合、setParams() をスキップする。
-    //  setParams() → updateTopologyAndRouting() → designStage2() × 16 ch は
-    //  10×10 LDLT 行列演算を含む重い処理。パラメータが静止していれば不要。
-    //
-    //  paramsNeedUpdate は以下のタイミングで true になる:
-    //    - prepareToPlay() 後
-    //    - アルゴリズム切替時
-    //    - 上記以外に DSPParams の値が変化したとき (operator!= で検出)
-    // ─────────────────────────────────────────────────────────────────────────
     if (paramsNeedUpdate || p != lastSentParams) {
         engine.setParams(p);
         lastSentParams = p;
@@ -152,7 +151,7 @@ void FDNReverbAudioProcessor::setStateInformation(const void* d, int s) {
     std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(d, s));
     if (xml && xml->hasTagName(apvts.state.getType())) {
         apvts.replaceState(juce::ValueTree::fromXml(*xml));
-        paramsNeedUpdate = true;  // セッションロード後は必ず再送
+        paramsNeedUpdate = true;
     }
 }
 
@@ -174,15 +173,21 @@ void FDNReverbAudioProcessor::loadPresetDefaults(int algorithmIndex)
 
     setParam(ParamID::RoomSize, def.roomSize);
     setParam(ParamID::DecayTime, def.decayTime);
-    setParam(ParamID::HFDamping, def.hfDamp);
-    setParam(ParamID::LFAbsorption, def.lfAbsorb);
+
+    // ★ Step A: HF Damping / LF Absorption は常に 0 にリセット
+    //   AlgorithmPresets.h の def.hfDamp / def.lfAbsorb は使わない。
+    //   理由: アルゴリズム選択直後は「プリセットそのものの RT60 カーブ」を
+    //         そのまま再現するのが正しい挙動。ユーザーが意図的に補正を
+    //         加える前にデフォルトで補正が入るのは不自然。
+    setParam(ParamID::HFDamping, 0.0f);
+    setParam(ParamID::LFAbsorption, 0.0f);
+
     setParam(ParamID::Diffusion, def.diffusion);
     setParam(ParamID::ModAmount, def.modAmount);
     setParam(ParamID::ModRate, def.modRate);
     setParam(ParamID::ERLevel, def.erLevel);
     setParam(ParamID::Saturation, def.saturation);
 
-    // ProMode 帯域ノブをフラットにリセット
     setParam(ParamID::RTBand0, 1.0f);
     setParam(ParamID::RTBand1, 1.0f);
     setParam(ParamID::RTBand2, 1.0f);

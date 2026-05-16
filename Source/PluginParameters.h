@@ -40,7 +40,6 @@ namespace FDNReverb {
         inline const juce::String RTBand7 = "rtband7";
         inline const juce::String RTBand8 = "rtband8";
         inline const juce::String RTBand9 = "rtband9";
-        // ─── Phase 5 追加: Output EQ (Wet 出力段) ───
         inline const juce::String LoCut = "locut";
         inline const juce::String HiCut = "hicut";
     }
@@ -49,8 +48,9 @@ namespace FDNReverb {
         int   algorithmIndex{ 0 };
         float decayScale{ 1.0f };
         float roomSizeScale{ 1.0f };
-        float hfDamping{ 0.5f };
-        float lfAbsorption{ 0.5f };
+        // ★ Step A: デフォルト 0.5 → 0.0 (RT60 グラフでオレンジと灰色を一致させる)
+        float hfDamping{ 0.0f };
+        float lfAbsorption{ 0.0f };
         float diffusion{ 0.70f };
         float preDelayMs{ 10.0f };
         float modAmount{ 0.25f };
@@ -58,8 +58,9 @@ namespace FDNReverb {
         float stereoWidth{ 0.80f };
         float erLevel{ 0.6f };
         float lateLevel{ 1.0f };
+        // ★ Step A: 表示は -60〜0dB に統一、デフォルト -12dB
         float wetDB{ -12.0f };
-        float dryDB{ 0.0f };
+        float dryDB{ -12.0f };
         float saturation{ 0.0f };
         int   satTypeIdx{ 0 };
         float duckingAmount{ 0.0f };
@@ -73,8 +74,6 @@ namespace FDNReverb {
         float tiltHigh{ 1.0f };
         std::array<float, 10> rtBands{ { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
                                          1.0f, 1.0f, 1.0f, 1.0f, 1.0f } };
-
-        // ─── Phase 5 追加 ───
         float loCutHz{ 20.0f };
         float hiCutHz{ 20000.0f };
 

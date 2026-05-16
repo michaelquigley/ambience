@@ -92,7 +92,7 @@ namespace FDNReverb {
         currentERDelaySamples.fill(0.0f);
         currentERGains.fill(0.0f);
         outputLimiter.prepare(sampleRate);
-        outputEQ.prepare(sampleRate);       // ★ Phase 5
+        outputEQ.prepare(sampleRate);
 
         duckingAttackCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.010f));
         duckingReleaseCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.200f));
@@ -116,7 +116,7 @@ namespace FDNReverb {
         saturatorL.reset();
         saturatorR.reset();
         outputLimiter.reset();
-        outputEQ.reset();                   // ★ Phase 5
+        outputEQ.reset();
         duckingEnvelope = 0.0f;
         for (auto& lfo : lfos) lfo.smoothed = 0.0f;
     }
@@ -137,7 +137,6 @@ namespace FDNReverb {
         duckingAttackCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * attMs * 0.001f));
         duckingReleaseCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * relMs * 0.001f));
 
-        // ★ Phase 5: Output EQ カットオフ反映
         outputEQ.setLoCutHz(p.loCutHz);
         outputEQ.setHiCutHz(p.hiCutHz);
 
@@ -192,7 +191,6 @@ namespace FDNReverb {
         }
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
-        // 設計と同時に targetDb を受け取り、effectiveRT60 を逆算する
         std::array<float, NUM_BANDS> targetDbAccum;
         targetDbAccum.fill(0.0f);
 
@@ -202,20 +200,10 @@ namespace FDNReverb {
                 activeParams.hfDamping, activeParams.lfAbsorption);
             for (int b = 0; b < NUM_BANDS; ++b) {
                 currentAbsorptionCoeffsS2[i][b] = s2.geqStages[b];
-                // 16ch の targetDb を平均化（中央値より計算が単純で安定）
                 targetDbAccum[b] += s2.targetDb[b];
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────────
-        //  ★ Phase 5: effectiveRT60 を LF/HF 補正反映済みの値に逆算
-        // ─────────────────────────────────────────────────────────────────────────
-        //   targetDb = -60 × m / (fs × T60)
-        //    → T60 = -60 × m / (fs × targetDb)
-        //
-        //   16ch の targetDb 平均と、代表遅延長（中間 ch 8 の遅延）で逆算する。
-        //   これによりグラフが LF Absorption / HF Damping の実際の効果を反映する。
-        // ─────────────────────────────────────────────────────────────────────────
         const float representativeDelay = fdnBaseDelaySamples[FDN_ORDER / 2];
         for (int b = 0; b < NUM_BANDS; ++b) {
             const float avgTargetDb = targetDbAccum[b] / static_cast<float>(FDN_ORDER);
@@ -224,10 +212,8 @@ namespace FDNReverb {
                     / (static_cast<float>(fs) * avgTargetDb);
             }
             else {
-                // targetDb が 0 に近い場合は理論上 T60 が無限大なので scaledRT60 を保持
                 effectiveRT60[b] = scaledRT60[b];
             }
-            // 異常値を抑制（実装上の安全策）
             effectiveRT60[b] = juce::jlimit(0.05f, 30.0f, effectiveRT60[b]);
         }
 #else
@@ -240,7 +226,7 @@ namespace FDNReverb {
         }
 #endif
 
-        float rt60Mid = std::max(0.1f, effectiveRT60[4]);  // ★ effectiveRT60 で AGC 計算
+        float rt60Mid = std::max(0.1f, effectiveRT60[4]);
 
         constexpr float baseDB = 20.0f;
         float decayCompDB = 7.0f * std::log10(rt60Mid);
@@ -250,13 +236,6 @@ namespace FDNReverb {
         };
         float algoOffset = algorithmOffsetDB[juce::jlimit(0, 6, activeParams.algorithmIndex)];
 
-        // ─────────────────────────────────────────────────────────────────────────
-        //  ★ Phase 5: トポロジー結線 + Diffusion 全アルゴリズム適用
-        // ─────────────────────────────────────────────────────────────────────────
-        //   bypassInputDiffusers を全て false に変更。
-        //   アルゴリズムごとに diffusionSensitivity を設定し、
-        //   キャラクタを保ちながら Diffusion ノブの効果を全アルゴリズムに反映する。
-        // ─────────────────────────────────────────────────────────────────────────
         switch (currentTopology) {
         case ReverbTopology::Room:
             bypassER = false; bypassInputDiffusers = false;
@@ -357,20 +336,32 @@ namespace FDNReverb {
         const float duckThreshLin = juce::Decibels::decibelsToGain(activeParams.duckingThreshDB);
         const float duckAmountDB = activeParams.duckingAmount;
 
-        // ─────────────────────────────────────────────────────────────────────────
-        //  ★ Phase 5: Diffusion をプロ水準 + アルゴリズム別感度
-        // ─────────────────────────────────────────────────────────────────────────
-        //   effectiveDiffusion = diffusion × diffusionSensitivity
-        //     - Room/Hall: 感度 1.0 (フル効果)
-        //     - Plate:     感度 0.7 (金属感を保持)
-        //     - Spring:    感度 0.5 (バネのキャラクタを守る)
-        //     - Goldfoil:  感度 0.8 (バランス)
-        // ─────────────────────────────────────────────────────────────────────────
         const float effectiveDiffusion = activeParams.diffusion * diffusionSensitivity;
         const float diffuserGain = 0.25f + effectiveDiffusion * 0.55f;
         const float effectiveApfGain = apfGain * (0.60f + effectiveDiffusion * 0.40f);
 
-        // LFO 係数の事前計算
+        // ─────────────────────────────────────────────────────────────────────────
+        //  ★ Step A: ステレオ広がり強化
+        // ─────────────────────────────────────────────────────────────────────────
+        //   stereoWidth に応じて以下のステレオ要素を協調させる:
+        //
+        //   1. サイド成分注入係数 (sideBoost):
+        //      width × 1.5 倍に強化 (元: width × 1.0)
+        //      → L/R 入力の差分成分が FDN により強く注入される
+        //
+        //   2. FDN 出力 L/R 脱相関 (decorrelation):
+        //      width=0   → L/R 完全一致 (モノ)
+        //      width=0.5 → 50% 脱相関
+        //      width=1   → 100% 脱相関 (各 ch は L か R のみ寄与)
+        //
+        //   3. ER 左右非対称強化:
+        //      偶数タップ → L 主体 (R 漏れ係数 = (1 - width) × 0.7)
+        //      奇数タップ → R 主体 (L 漏れ係数 = (1 - width) × 0.7)
+        //      → width=1 で完全 L/R 分離、width=0 で完全モノ
+        // ─────────────────────────────────────────────────────────────────────────
+        const float sideBoost = stereoWidth * 1.5f;
+        const float erLeakage = (1.0f - stereoWidth) * 0.7f;
+
         std::array<float, FDN_ORDER> lfoCoeffs;
         {
             const float fsf = static_cast<float>(fs);
@@ -389,7 +380,6 @@ namespace FDNReverb {
             const float sideIn = (leftIn - rightIn) * 0.5f;
             float erOutL = 0.0f, erOutR = 0.0f;
 
-            // Ducking
             const float inputPeak = juce::jmax(std::abs(leftIn), std::abs(rightIn));
             const float envCoeff = (inputPeak > duckingEnvelope)
                 ? duckingAttackCoeff : duckingReleaseCoeff;
@@ -403,7 +393,6 @@ namespace FDNReverb {
                 duckGainLinear = juce::Decibels::decibelsToGain(gainRedDB);
             }
 
-            // ── 1. Input Diffusers (全アルゴリズム有効) ──
             float fdnInputMid = midIn;
             if (!bypassInputDiffusers) {
                 for (int i = 0; i < 4; ++i) {
@@ -415,7 +404,7 @@ namespace FDNReverb {
                 }
             }
 
-            // ── 2. ER Tapped Delay ──
+            // ── ER Tapped Delay (★ Step A: 左右非対称強化) ──
             if (!bypassER) {
                 erDelay.write(midIn);
                 float erTotalL = 0.0f, erTotalR = 0.0f;
@@ -423,19 +412,20 @@ namespace FDNReverb {
                     float tapValue = erDelay.read(currentERDelaySamples[t]);
                     float tapGain = currentERGains[t] * 0.5f;
                     if (t % 2 == 0) {
+                        // 偶数タップ: L 主体、R は erLeakage 倍のみ
                         erTotalL += tapValue * tapGain;
-                        erTotalR += tapValue * tapGain * 0.7f;
+                        erTotalR += tapValue * tapGain * erLeakage;
                     }
                     else {
+                        // 奇数タップ: R 主体、L は erLeakage 倍のみ
                         erTotalR += tapValue * tapGain;
-                        erTotalL += tapValue * tapGain * 0.7f;
+                        erTotalL += tapValue * tapGain * erLeakage;
                     }
                 }
                 erOutL = erTotalL;
                 erOutR = erTotalR;
             }
 
-            // ── 3. FDN + Nested Allpass ──
             std::array<float, 16> currentFb = fbVec;
             fastWalshHadamardTransform(currentFb);
             applySignFlipping(currentFb);
@@ -465,17 +455,22 @@ namespace FDNReverb {
 
                 nextFb[i] = apfOut;
 
-                const float sideForCh = (i % 2 == 0 ? +sideIn : -sideIn) * stereoWidth;
+                // ★ Step A: サイド成分注入強化 (sideBoost 適用)
+                const float sideForCh = (i % 2 == 0 ? +sideIn : -sideIn) * sideBoost;
                 const float fdnInputForThisCh = (fdnInputMid + sideForCh) * 0.25f;
                 fdnDelays[i].write(fdnInputForThisCh + currentFb[i]);
 
+                // ★ Step A: FDN 出力 L/R 脱相関強化
+                //   width=1 → 反対側への漏れ 0% (完全分離)
+                //   width=0 → 反対側への漏れ 100% (完全モノ)
+                const float crossLeak = 1.0f - stereoWidth;
                 if (i % 2 == 0) {
                     fdnOutL += apfOut;
-                    fdnOutR += apfOut * (1.0f - stereoWidth);
+                    fdnOutR += apfOut * crossLeak;
                 }
                 else {
                     fdnOutR += apfOut;
-                    fdnOutL += apfOut * (1.0f - stereoWidth);
+                    fdnOutL += apfOut * crossLeak;
                 }
             }
 
@@ -490,19 +485,11 @@ namespace FDNReverb {
 
             acousticMetrics.processSample((lateMixL + lateMixR) * 0.5f);
 
-            // ── 5. Saturation (Layer 2) ──
             float satL = saturatorL.processSample(lateMixL);
             float satR = saturatorR.processSample(lateMixR);
 
             if (erSolo) { satL = 0.0f; satR = 0.0f; }
 
-            // ─────────────────────────────────────────────────────────────────
-            //  ★ Phase 5: Output EQ (Wet のみ、Dry はバイパス)
-            // ─────────────────────────────────────────────────────────────────
-            //   信号フロー: Saturation → [Lo Cut → Hi Cut] → Wet 出力
-            //   ER 成分も含めて Wet 全体に適用 (ER は Wet の一部であるため自然)。
-            //   Dry 経路（PluginProcessor 側）には一切影響しない。
-            // ─────────────────────────────────────────────────────────────────
             float wetL = erMixL + satL;
             float wetR = erMixR + satR;
             outputEQ.process(wetL, wetR);
