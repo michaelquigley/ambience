@@ -238,7 +238,7 @@ namespace FDNReverb {
 
         float rt60Mid = std::max(0.1f, effectiveRT60[4]);
 
-        constexpr float baseDB = 20.0f;
+        constexpr float baseDB = 16.0f;
         float decayCompDB = 7.0f * std::log10(rt60Mid);
 
         static constexpr std::array<float, 7> algorithmOffsetDB = {

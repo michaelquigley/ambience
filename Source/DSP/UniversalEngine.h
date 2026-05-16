@@ -71,7 +71,7 @@ namespace FDNReverb {
 
         // ─── FDN ループ内マイクロサチュレーション ───
         inline static float processMicroSaturation(float x) noexcept {
-            constexpr float kInScale = 0.08f;
+            constexpr float kInScale = 0.15f;
             constexpr float kOutScale = 1.0f / kInScale;
             const float xs = x * kInScale;
             if (xs > 3.0f) return  kOutScale;
