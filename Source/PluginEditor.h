@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "PresetManager.h"
 #include "GUI/AmbienceUI.h"
 #include "GUI/DecayCurveViz.h"
 
@@ -19,10 +20,15 @@ private:
     void timerCallback() override;
     void updatePanelVisibility();
 
+    // ─── プリセット UI ヘルパー ───
+    void refreshPresetCombo();
+    void savePresetWithDialog();
+    void deleteCurrentPreset();
+
     FDNReverbAudioProcessor& audioProcessor;
     AmbienceLookAndFeel laf;
 
-    // ─── 共通 ──
+    // ─── 共通 ───
     AlgorithmSelector algoSelector;
     RT60Visualizer    rt60Viz;
     DecayCurveViz     decayCurveViz;
@@ -42,7 +48,7 @@ private:
 
     bool isProMode{ false };
 
-    // ─── Normal Mode ノブ ──
+    // ─── Normal Mode ノブ ───
     ArcKnob kPreDelay, kRoomSize, kDecay;
     ArcKnob kHFDamp, kLFAbsorb;
     ArcKnob kDiffusion, kModAmt, kModRate;
@@ -50,23 +56,27 @@ private:
     ArcKnob kERLevel, kSaturation;
     ArcKnob kWet, kDry;
     ArcKnob kDuckAmt, kDuckThr, kDuckAtt, kDuckRel;
+    ArcKnob kLoCutNorm, kHiCutNorm;
 
-    // ─── ★ Phase 5: Output EQ ノブ (Normal Mode 用) ──
-    ArcKnob kLoCutNorm;
-    ArcKnob kHiCutNorm;
-
-    // ─── ProMode パネル ──
+    // ─── ProMode パネル ───
     std::array<ArcKnob, 10> kRTBands;
     juce::Label    satTypeLabel;
     juce::ComboBox satTypeCombo;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> satTypeAttachment;
     ArcKnob kTiltLow, kTiltMid, kTiltHigh;
+    ArcKnob kLoCutPro, kHiCutPro;
 
-    // ─── ★ Phase 5: Output EQ ノブ (ProMode 用) ──
-    // Normal Mode 版と同じ APVTS パラメータに紐付くため値は同期する
-    ArcKnob kLoCutPro;
-    ArcKnob kHiCutPro;
+    // ─── プリセット UI ───
+    std::unique_ptr<PresetManager> presetManager;
+    juce::TextButton presetPrevButton;
+    juce::ComboBox   presetCombo;
+    juce::TextButton presetNextButton;
+    // 既存の presetSaveButton / presetDeleteButton の隣に追加
+    juce::TextButton presetSaveButton;
+    juce::TextButton presetLoadButton;    // ★ 追加
+    juce::TextButton presetDeleteButton;
 
+    // ─── Layout 定数 ───
     static constexpr int W = 900;
     static constexpr int H = 540;
     static constexpr int PAD = 8;
@@ -75,6 +85,10 @@ private:
     static constexpr int KNOB_LBL_H = 14;
     static constexpr int UNIT_H = 88;
     static constexpr int ROW1_GAP = 18;
+
+    // プリセットパネルの固定 X 座標
+    // DUCKING 終端 (616) + gap(16) = 632
+    static constexpr int PRESET_PANEL_X = 632;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FDNReverbEditor)
 };

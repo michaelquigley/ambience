@@ -10,7 +10,6 @@ static constexpr int Y_ROW2 = 222;
 static constexpr int Y_SEP = 322;
 static constexpr int Y_VIZ = 326;
 
-// ─── Row1 セクション X 座標 (Normal Mode) ───
 static constexpr int SEC_TIME = 8;
 static constexpr int SEC_FREQUENCY = 254;
 static constexpr int SEC_DIFFUSION = 418;
@@ -21,6 +20,9 @@ static constexpr int SEP_FD = 409;
 static constexpr int SEP_DS = 655;
 static constexpr int SEP_SC = 737;
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  コンストラクタ
+// ─────────────────────────────────────────────────────────────────────────────
 FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     : AudioProcessorEditor(&p),
     audioProcessor(p),
@@ -31,6 +33,7 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     setLookAndFeel(&laf);
     setSize(W, H);
 
+    // ── Title ──
     titleLabel.setText("AMBIENCE", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(juce::FontOptions(
         "Helvetica Neue", 14.f, juce::Font::bold)));
@@ -60,11 +63,10 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     BK(kDuckThr, "duckthresh", "THRESH");
     BK(kDuckAtt, "duckattack", "ATTACK");
     BK(kDuckRel, "duckrelease", "RELEASE");
-
-    // ★ Phase 5: Output EQ ノブ (Normal Mode 用)
     BK(kLoCutNorm, "locut", "LO CUT");
     BK(kHiCutNorm, "hicut", "HI CUT");
 
+    // ── ProMode ボタン ──
     proModeButton.setButtonText("PRO");
     proModeButton.setClickingTogglesState(true);
     proModeButton.setColour(juce::TextButton::buttonOnColourId, AmbienceColors::Accent);
@@ -76,6 +78,7 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
         new juce::AudioProcessorValueTreeState::ButtonAttachment(
             p.apvts, "promode", proModeButton));
 
+    // ── ER SOLO ボタン ──
     erSoloButton.setButtonText("ER SOLO");
     erSoloButton.setClickingTogglesState(true);
     erSoloButton.setColour(juce::TextButton::buttonOnColourId, AmbienceColors::AccentBlue);
@@ -87,6 +90,7 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
         new juce::AudioProcessorValueTreeState::ButtonAttachment(
             p.apvts, "ersolo", erSoloButton));
 
+    // ── ProMode: RT60 帯域ノブ ──
     static const char* rtBandIDs[] = {
         "rtband0","rtband1","rtband2","rtband3","rtband4",
         "rtband5","rtband6","rtband7","rtband8","rtband9"
@@ -98,6 +102,7 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     for (int i = 0; i < 10; ++i)
         kRTBands[i].build(p.apvts, rtBandIDs[i], rtBandLbls[i], this, laf);
 
+    // ── ProMode: SatType ──
     satTypeLabel.setText("SAT TYPE", juce::dontSendNotification);
     satTypeLabel.setFont(juce::Font(juce::FontOptions(9.f)));
     satTypeLabel.setColour(juce::Label::textColourId, AmbienceColors::TextSecondary);
@@ -111,15 +116,83 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
         new juce::AudioProcessorValueTreeState::ComboBoxAttachment(
             p.apvts, "sattype", satTypeCombo));
 
+    // ── ProMode: Tilt EQ + Output EQ ──
     BK(kTiltLow, "tiltlow", "TILT LOW");
     BK(kTiltMid, "tiltmid", "TILT MID");
     BK(kTiltHigh, "tilthigh", "TILT HIGH");
-
-    // ★ Phase 5: Output EQ ノブ (ProMode 用)
-    // Normal Mode 版と同じ APVTS パラメータに紐付くため値は同期する
     BK(kLoCutPro, "locut", "LO CUT");
     BK(kHiCutPro, "hicut", "HI CUT");
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  プリセット UI
+    // ─────────────────────────────────────────────────────────────────────────
+    presetManager = std::make_unique<PresetManager>(p);
+
+    // ◀ PREV
+    presetPrevButton.setButtonText("<");
+    presetPrevButton.setColour(juce::TextButton::buttonColourId, AmbienceColors::Surface);
+    presetPrevButton.setColour(juce::TextButton::textColourOffId, AmbienceColors::TextPrimary);
+    addAndMakeVisible(presetPrevButton);
+    presetPrevButton.onClick = [this] {
+        presetManager->loadPrevPreset();
+        };
+
+    // プリセット名コンボ
+    presetCombo.setLookAndFeel(&laf);
+    addAndMakeVisible(presetCombo);
+    presetCombo.onChange = [this] {
+        int idx = presetCombo.getSelectedItemIndex();
+        auto names = presetManager->getPresetNames();
+        if (idx >= 0 && idx < names.size())
+            presetManager->loadPreset(names[idx]);
+        };
+
+    // ▶ NEXT
+    presetNextButton.setButtonText(">");
+    presetNextButton.setColour(juce::TextButton::buttonColourId, AmbienceColors::Surface);
+    presetNextButton.setColour(juce::TextButton::textColourOffId, AmbienceColors::TextPrimary);
+    addAndMakeVisible(presetNextButton);
+    presetNextButton.onClick = [this] {
+        presetManager->loadNextPreset();
+        };
+
+    // SAVE
+    presetSaveButton.setButtonText("SAVE");
+    presetSaveButton.setColour(juce::TextButton::buttonColourId,
+        AmbienceColors::Accent.withAlpha(0.75f));
+    presetSaveButton.setColour(juce::TextButton::textColourOffId, AmbienceColors::Background);
+    addAndMakeVisible(presetSaveButton);
+    presetSaveButton.onClick = [this] { savePresetWithDialog(); };
+
+    // ─── 変更後 ───
+        // LOAD
+    presetLoadButton.setButtonText("LOAD");
+    presetLoadButton.setColour(juce::TextButton::buttonColourId,
+        AmbienceColors::AccentBlue.withAlpha(0.75f));
+    presetLoadButton.setColour(juce::TextButton::textColourOffId,
+        AmbienceColors::Background);
+    addAndMakeVisible(presetLoadButton);
+    presetLoadButton.onClick = [this] {
+        auto names = presetManager->getPresetNames();
+        int idx = presetCombo.getSelectedItemIndex();
+        if (idx >= 0 && idx < names.size())
+            presetManager->loadPreset(names[idx]);
+        };
+
+    // DELETE
+    presetDeleteButton.setButtonText("DELETE");
+    presetDeleteButton.setColour(juce::TextButton::buttonColourId, AmbienceColors::Surface);
+    presetDeleteButton.setColour(juce::TextButton::textColourOffId, AmbienceColors::TextSecondary);
+    addAndMakeVisible(presetDeleteButton);
+    presetDeleteButton.onClick = [this] { deleteCurrentPreset(); };
+
+    // コールバック設定
+    presetManager->onPresetListChanged = [this] { refreshPresetCombo(); };
+    presetManager->onPresetLoaded = [this](const juce::String&) { refreshPresetCombo(); };
+
+    refreshPresetCombo();
+
+    // ── Visualizers ──
     rt60Viz.setProcessor(&p);
     decayCurveViz.setProcessor(&p);
     addAndMakeVisible(rt60Viz);
@@ -128,6 +201,7 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     addAndMakeVisible(vuIn);
     addAndMakeVisible(vuOut);
 
+    // ── AcousticMetrics ──
     labelMetricsTitle.setText("ACOUSTICS", juce::dontSendNotification);
     labelMetricsTitle.setFont(juce::Font(juce::FontOptions(
         "Helvetica Neue", 8.5f, juce::Font::bold)));
@@ -167,11 +241,19 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     startTimerHz(60);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  デストラクタ
+// ─────────────────────────────────────────────────────────────────────────────
 FDNReverbEditor::~FDNReverbEditor() {
     stopTimer();
     setLookAndFeel(nullptr);
+    satTypeCombo.setLookAndFeel(nullptr);
+    presetCombo.setLookAndFeel(nullptr);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  timerCallback
+// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::timerCallback()
 {
     vuIn.setLevels(audioProcessor.getInputRMSL(),
@@ -207,6 +289,9 @@ void FDNReverbEditor::timerCallback()
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  updatePanelVisibility
+// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::updatePanelVisibility()
 {
     auto setKnob = [](ArcKnob& k, bool vis) {
@@ -234,8 +319,8 @@ void FDNReverbEditor::updatePanelVisibility()
     setKnob(kDuckThr, showNormal);
     setKnob(kDuckAtt, showNormal);
     setKnob(kDuckRel, showNormal);
-    setKnob(kLoCutNorm, showNormal);   // ★ Phase 5
-    setKnob(kHiCutNorm, showNormal);   // ★ Phase 5
+    setKnob(kLoCutNorm, showNormal);
+    setKnob(kHiCutNorm, showNormal);
 
     for (auto& k : kRTBands) setKnob(k, showPro);
     satTypeLabel.setVisible(showPro);
@@ -243,10 +328,22 @@ void FDNReverbEditor::updatePanelVisibility()
     setKnob(kTiltLow, showPro);
     setKnob(kTiltMid, showPro);
     setKnob(kTiltHigh, showPro);
-    setKnob(kLoCutPro, showPro);       // ★ Phase 5
-    setKnob(kHiCutPro, showPro);       // ★ Phase 5
+    setKnob(kLoCutPro, showPro);
+    setKnob(kHiCutPro, showPro);
+
+    // プリセット UI は常時表示
+    presetPrevButton.setVisible(true);
+    presetCombo.setVisible(true);
+    presetNextButton.setVisible(true);
+    // ─── 変更後 ───
+    presetSaveButton.setVisible(true);
+    presetLoadButton.setVisible(true);    // ★ 追加
+    presetDeleteButton.setVisible(true);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  resized
+// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::resized()
 {
     titleLabel.setBounds(PAD, Y_HEADER, 180, 32);
@@ -288,7 +385,7 @@ void FDNReverbEditor::resized()
         place2(kWet, kx, Y_ROW2);
         place2(kDry, kx, Y_ROW2);
         kx += 16;
-        place2(kLoCutNorm, kx, Y_ROW2);   // ★ Phase 5
+        place2(kLoCutNorm, kx, Y_ROW2);
         place2(kHiCutNorm, kx, Y_ROW2);
         kx += 16;
         place2(kDuckAmt, kx, Y_ROW2);
@@ -299,27 +396,50 @@ void FDNReverbEditor::resized()
     }
     else {
         // ── ProMode 1段目 ──
-        {
-            int kx = PAD;
-            for (int i = 0; i < 10; ++i)
-                place1(kRTBands[i], kx, Y_ROW1);
-        }
+        int kx = PAD;
+        for (int i = 0; i < 10; ++i)
+            place1(kRTBands[i], kx, Y_ROW1);
 
-        // ── ProMode 2段目: SatType + Tilt EQ + Output EQ ──
-        {
-            int kx2 = PAD;
-            satTypeLabel.setBounds(kx2, Y_SLABEL2, KNOB_W, KNOB_LBL_H);
-            satTypeCombo.setBounds(kx2, Y_SLABEL2 + KNOB_LBL_H + 2, KNOB_W + PAD, 24);
-            kx2 += KNOB_W + PAD + PAD + 8;
-            place2(kTiltLow, kx2, Y_ROW2);
-            place2(kTiltMid, kx2, Y_ROW2);
-            place2(kTiltHigh, kx2, Y_ROW2);
-            kx2 += 16;
-            place2(kLoCutPro, kx2, Y_ROW2);   // ★ Phase 5
-            place2(kHiCutPro, kx2, Y_ROW2);
-        }
+        // ── ProMode 2段目 ──
+        int kx2 = PAD;
+        satTypeLabel.setBounds(kx2, Y_SLABEL2, KNOB_W, KNOB_LBL_H);
+        satTypeCombo.setBounds(kx2, Y_SLABEL2 + KNOB_LBL_H + 2, KNOB_W + PAD, 24);
+        kx2 += KNOB_W + PAD + PAD + 8;
+        place2(kTiltLow, kx2, Y_ROW2);
+        place2(kTiltMid, kx2, Y_ROW2);
+        place2(kTiltHigh, kx2, Y_ROW2);
+        kx2 += 16;
+        place2(kLoCutPro, kx2, Y_ROW2);
+        place2(kHiCutPro, kx2, Y_ROW2);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    //  プリセット UI (常時・モード非依存)
+    // ─────────────────────────────────────────────────────────────────────────
+    //  配置 (PRESET_PANEL_X=632 起点):
+    //
+    //  上段 Y=Y_ROW2:   [◀(26)] gap4 [combo(154)] gap4 [▶(26)]  → 右端 848
+    //  下段 Y=Y_ROW2+34:[SAVE(104)] gap8 [DELETE(104)]           → 右端 848
+    //
+    //  セパレーター縦線: PRESET_PANEL_X - 9 = 623
+    // ─────────────────────────────────────────────────────────────────────────
+    {
+        const int px = PRESET_PANEL_X;
+        const int btnH = 26;
+
+        // 上段
+        presetPrevButton.setBounds(px, Y_ROW2, 26, btnH);
+        presetCombo.setBounds(px + 30, Y_ROW2, 154, btnH);
+        presetNextButton.setBounds(px + 188, Y_ROW2, 26, btnH);
+
+        // ─── 変更後 ───
+               // 下段: [SAVE(68)] [LOAD(68)] [DELETE(68)]
+        presetSaveButton.setBounds(px, Y_ROW2 + 34, 68, btnH);
+        presetLoadButton.setBounds(px + 72, Y_ROW2 + 34, 68, btnH);
+        presetDeleteButton.setBounds(px + 144, Y_ROW2 + 34, 68, btnH);
+    }
+
+    // ── Visualizers ──
     const int vizTotalH = H - Y_VIZ - PAD;
     const int rt60Height = vizTotalH / 2 - 2;
     const int decayHeight = vizTotalH / 2 - 2;
@@ -328,6 +448,7 @@ void FDNReverbEditor::resized()
     rt60Viz.setBounds(PAD, Y_VIZ, W - PAD * 2, rt60Height);
     decayCurveViz.setBounds(PAD, decayY, W - PAD * 2, decayHeight);
 
+    // ── AcousticMetrics ──
     const int metricsRight = W - PAD - 8;
     const int metricsW = 280;
     const int metricsLeft = metricsRight - metricsW;
@@ -351,6 +472,9 @@ void FDNReverbEditor::resized()
     labelEDTValue.setBounds(metricsLeft + colW + colSpacing + captionW, metricsRow2Y, valueW, metricsRowH);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  paint
+// ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::paint(juce::Graphics& g)
 {
     g.fillAll(AmbienceColors::Background);
@@ -373,7 +497,7 @@ void FDNReverbEditor::paint(juce::Graphics& g)
         "Helvetica Neue", 8.5f, juce::Font::bold)));
 
     auto sl = [&](int x, int y, const char* t) {
-        g.drawText(t, x, y, 160, 14, juce::Justification::centredLeft);
+        g.drawText(t, x, y, 200, 14, juce::Justification::centredLeft);
         };
 
     if (!isProMode) {
@@ -384,12 +508,9 @@ void FDNReverbEditor::paint(juce::Graphics& g)
         g.drawVerticalLine(SEP_DS, (float)Y_SLABEL1, (float)(Y_ROW1 + UNIT_H));
         g.drawVerticalLine(SEP_SC, (float)Y_SLABEL1, (float)(Y_ROW1 + UNIT_H));
 
-        // ── Row 2 セパレーター (MIX | OUT EQ | DUCKING) ──
-        // 各セクションの開始 X (place2 と同じ計算式)
-        const int row2_mix_x = PAD;
+        // ── Row 2 セパレーター ──
         const int row2_outeq_x = PAD + 2 * (KNOB_W + PAD) + 16;
         const int row2_duck_x = row2_outeq_x + 2 * (KNOB_W + PAD) + 16;
-
         g.drawVerticalLine(row2_outeq_x - 9, (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
         g.drawVerticalLine(row2_duck_x - 9, (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
 
@@ -400,23 +521,21 @@ void FDNReverbEditor::paint(juce::Graphics& g)
         sl(SEC_DIFFUSION, Y_SLABEL1, "DIFFUSION");
         sl(SEC_STEREO, Y_SLABEL1, "STEREO");
         sl(SEC_CHARACTER, Y_SLABEL1, "CHARACTER");
-
-        sl(row2_mix_x, Y_SLABEL2, "MIX");
+        sl(PAD, Y_SLABEL2, "MIX");
         sl(row2_outeq_x, Y_SLABEL2, "OUT EQ");
         sl(row2_duck_x, Y_SLABEL2, "DUCKING");
 
     }
     else {
+        // ── ProMode ──
         g.setColour(AmbienceColors::Accent.withAlpha(0.75f));
         sl(PAD, Y_SLABEL1, "RT60 PER BAND");
 
         g.setColour(AmbienceColors::Separator.withAlpha(0.5f));
         g.drawHorizontalLine(Y_SLABEL2 - 4, (float)PAD, (float)(W - PAD));
 
-        // ProMode 2段目: SAT TYPE | TILT EQ | OUT EQ
         const int tilt_x = PAD + KNOB_W + PAD + PAD + 8;
         const int outeq_x = tilt_x + 3 * (KNOB_W + PAD) + 16;
-
         g.setColour(AmbienceColors::Separator);
         g.drawVerticalLine(outeq_x - 9, (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
 
@@ -424,4 +543,106 @@ void FDNReverbEditor::paint(juce::Graphics& g)
         sl(tilt_x, Y_SLABEL2, "TILT EQ");
         sl(outeq_x, Y_SLABEL2, "OUT EQ");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  プリセットセクション (常時・モード非依存)
+    // ─────────────────────────────────────────────────────────────────────────
+    g.setColour(AmbienceColors::Separator);
+    g.drawVerticalLine(PRESET_PANEL_X - 9,
+        (float)Y_SLABEL2, (float)(Y_ROW2 + UNIT_H));
+    g.setColour(AmbienceColors::Accent.withAlpha(0.75f));
+    sl(PRESET_PANEL_X, Y_SLABEL2, "PRESET");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  プリセット UI ヘルパー
+// ─────────────────────────────────────────────────────────────────────────────
+void FDNReverbEditor::refreshPresetCombo()
+{
+    presetCombo.clear(juce::dontSendNotification);
+
+    auto names = presetManager->getPresetNames();
+    if (names.isEmpty()) {
+        presetCombo.addItem("-- No Presets --", 1);
+        presetCombo.setSelectedItemIndex(0, juce::dontSendNotification);
+        // ─── 変更後 ───
+        presetDeleteButton.setEnabled(false);
+        presetLoadButton.setEnabled(false);    // ★ 追加
+        presetPrevButton.setEnabled(false);
+        presetNextButton.setEnabled(false);
+        return;
+    }
+
+    for (int i = 0; i < names.size(); ++i)
+        presetCombo.addItem(names[i], i + 1);
+
+    int idx = presetManager->getCurrentPresetIndex();
+    if (idx >= 0)
+        presetCombo.setSelectedItemIndex(idx, juce::dontSendNotification);
+    else
+        presetCombo.setSelectedItemIndex(0, juce::dontSendNotification);
+
+    // ─── 変更後 ───
+    presetDeleteButton.setEnabled(true);
+    presetLoadButton.setEnabled(true);           // ★ 追加
+    presetPrevButton.setEnabled(names.size() > 1);
+    presetNextButton.setEnabled(names.size() > 1);
+}
+
+void FDNReverbEditor::savePresetWithDialog()
+{
+    // ─────────────────────────────────────────────────────────────────────
+    //  AlertWindow を使ったプリセット名入力ダイアログ
+    //  enterModalState(async callback) を使用: runModalLoop() 不要
+    //  SafePointer でエディタが先に破棄された場合を安全に処理
+    // ─────────────────────────────────────────────────────────────────────
+    auto* dialog = new juce::AlertWindow(
+        "Save Preset",
+        "Enter a name for this preset:",
+        juce::MessageBoxIconType::NoIcon);
+
+    dialog->addTextEditor("name", presetManager->getCurrentPresetName());
+    dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<FDNReverbEditor> safeThis(this);
+
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safeThis, dialog](int result) {
+                if (safeThis != nullptr && result == 1) {
+                    auto name = dialog->getTextEditorContents("name").trim();
+                    if (name.isNotEmpty())
+                        safeThis->presetManager->savePreset(name);
+                }
+            }),
+        true   // deleteWhenDismissed
+    );
+}
+
+void FDNReverbEditor::deleteCurrentPreset()
+{
+    auto name = presetManager->getCurrentPresetName();
+    if (name.isEmpty()) return;
+
+    auto* dialog = new juce::AlertWindow(
+        "Delete Preset",
+        "Delete \"" + name + "\"?",
+        juce::MessageBoxIconType::WarningIcon);
+
+    dialog->addButton("Delete", 1);
+    dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<FDNReverbEditor> safeThis(this);
+
+    dialog->enterModalState(
+        true,
+        juce::ModalCallbackFunction::create(
+            [safeThis, name](int result) {
+                if (safeThis != nullptr && result == 1)
+                    safeThis->presetManager->deletePreset(name);
+            }),
+        true
+    );
 }

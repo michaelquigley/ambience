@@ -32,17 +32,16 @@ juce_add_plugin(Ambience
 # ソース（存在するファイルのみ）
 # ============================================================================
 target_sources(Ambience PRIVATE
-    # プラグインコア
     Source/PluginProcessor.h
     Source/PluginProcessor.cpp
     Source/PluginEditor.h
     Source/PluginEditor.cpp
     Source/PluginParameters.h
     Source/PluginParameters.cpp
-    # GUIモジュール
+    Source/PresetManager.h      # ★ 追加
+    Source/PresetManager.cpp    # ★ 追加
     Source/GUI/AmbienceUI.h
     Source/GUI/AmbienceUI.cpp
-    # DSPモジュール
     Source/AlgorithmPresets.h
     Source/DSP/DSPConstants.h
     Source/DSP/DelayMemory.h
@@ -52,8 +51,14 @@ target_sources(Ambience PRIVATE
     Source/DSP/MagnitudeResponseFitter.cpp
     Source/DSP/UniversalEngine.h
     Source/DSP/UniversalEngine.cpp
- "Source/DSP/AcousticMetrics.h" "Source/DSP/AcousticMetrics.cpp" "Source/GUI/DecayCurveViz.h" "Source/GUI/DecayCurveViz.cpp" "Source/DSP/Saturator.h" "Source/DSP/OutputLimiter.h" "Source/DSP/OutputEQ.h")
-# ============================================================================
+    Source/DSP/AcousticMetrics.h
+    Source/DSP/AcousticMetrics.cpp
+    Source/GUI/DecayCurveViz.h
+    Source/GUI/DecayCurveViz.cpp
+    Source/DSP/Saturator.h
+    Source/DSP/OutputLimiter.h
+    Source/DSP/OutputEQ.h
+)# ============================================================================
 # インクルードパス
 # ============================================================================
 target_include_directories(Ambience PRIVATE
