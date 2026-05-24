@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-GPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-![Downloads](https://img.shields.io/github/downloads/OTODESK4193/Ambience/total.svg)
+![Downloads](https://img.shields.io/github/downloads/OTODESK4193/Ambience1.0.1/total.svg)
 
 ##
 <img src="Source/Assets/Screenshot1.jpg" width="600">
@@ -180,7 +180,7 @@ Presets use JUCE's standard state serialization. Future versions of Ambience wil
 
 ## Installation
 
-1. Download the latest `Ambience.vst3` from the [Releases](https://github.com/OTODESK4193/Ambience/releases/latest) page.
+1. Download the latest `Ambience.vst3` from the [Releases](https://github.com/OTODESK4193/Ambience1.0.1/releases/latest) page.
 2. Copy the `.vst3` folder to your VST3 plugin directory:
    ```
    C:\Program Files\Common Files\VST3\
