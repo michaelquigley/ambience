@@ -15,7 +15,7 @@
 
 Ambience ships with **21 factory presets** modeled after some of the world's most iconic acoustic spaces, including Abbey Road Studio 1 & 2, Vienna Musikverein, Amsterdam Concertgebouw, Boston Symphony Hall, Carnegie Hall, and more. Whether you need a tight drum room, a lush orchestral hall, a vintage plate, or an infinite ambient space, Ambience covers it all.
 
-👉 **[Watch the Demo Video (動作デモ動画はこちら！)](https://x.com/kijyoumusic)**
+👉 **[Watch the Demo Video (動作デモ動画はこちら！)](https://x.com/kijyoumusic/status/2055967062325944741?s=20)**
 
 
 ## Key Features
