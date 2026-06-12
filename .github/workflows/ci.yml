@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        # gtk3 + webkit2gtk are intentionally omitted: with JUCE_WEB_BROWSER=0 and no
+        # NEEDS_WEB_BROWSER, JUCE never requires or links them. libcurl is likewise out
+        # (JUCE_USE_CURL=0). All package names below are identical on 22.04 and 24.04.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libjack-jackd2-dev \
+            libx11-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxcursor-dev libxcomposite-dev libxrender-dev \
+            libfreetype-dev libfontconfig-dev \
+            libgl-dev
+
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.10-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: juce-8.0.10-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Static verification
+        run: |
+          set -euo pipefail
+          SO="build/Ambience_artefacts/Release/VST3/Ambience.vst3/Contents/x86_64-linux/Ambience.so"
+          APP="build/Ambience_artefacts/Release/Standalone/Ambience"
+          test -f "$SO"  || { echo "::error::VST3 .so missing at $SO"; exit 1; }
+          test -x "$APP" || { echo "::error::Standalone binary missing at $APP"; exit 1; }
+          echo "== ldd $SO =="; ldd "$SO"
+          if ldd "$SO" | grep -i "not found"; then echo "::error::Unresolved libs in VST3"; exit 1; fi
+          if ldd "$APP" | grep -i "not found"; then echo "::error::Unresolved libs in Standalone"; exit 1; fi
+          # Dump strings once to a file, then grep the file. Do NOT pipe `strings` into
+          # `grep -Fq`: -q exits on first match and SIGPIPEs strings, which under
+          # `set -o pipefail` fails the pipeline even on a successful match.
+          strings -a "$SO" > so_strings.txt
+          EXPECTED=$(ls Presets/*.ambpreset | wc -l)
+          FOUND=0
+          for f in Presets/*.ambpreset; do
+            name="$(basename "$f")"
+            if grep -Fq "$name" so_strings.txt; then FOUND=$((FOUND+1));
+            else echo "::error::Embedded preset missing: $name"; fi
+          done
+          rm -f so_strings.txt
+          echo "Embedded presets found: $FOUND / $EXPECTED"
+          test "$FOUND" -eq "$EXPECTED" || { echo "::error::Preset count mismatch"; exit 1; }
+
+      - name: Stage artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp -r "build/Ambience_artefacts/Release/VST3/Ambience.vst3" stage/
+          cp "build/Ambience_artefacts/Release/Standalone/Ambience" stage/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ambience-linux-x86_64-${{ steps.vars.outputs.sha_short }}
+          path: stage/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ambience-linux-x86_64-${{ steps.vars.outputs.sha_short }}
+          path: stage
+
+      - name: Package release zip
+        run: |
+          set -euo pipefail
+          ZIP="Ambience-${GITHUB_REF_NAME}-linux-x86_64.zip"
+          ( cd stage && zip -r -y "../${ZIP}" "Ambience.vst3" "Ambience" )
+          echo "ZIP=${ZIP}" >> "$GITHUB_ENV"
+          ls -l "${ZIP}"
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: "Ambience ${{ github.ref_name }}"
+          files: ${{ env.ZIP }}
+          body: |
+            Linux x86_64 build of Ambience ${{ github.ref_name }}.
+            Contains the VST3 bundle (`Ambience.vst3`) and the Standalone binary.
+            Requires an AVX2-capable CPU (compiled with `-mavx2 -mfma`). Built on ubuntu-22.04.
