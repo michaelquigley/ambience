@@ -8,7 +8,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ============================================================================
 # JUCE
 # ============================================================================
-add_subdirectory(C:/JUCE ${CMAKE_BINARY_DIR}/JUCE)
+if(WIN32)
+    set(_JUCE_PATH_DEFAULT "C:/JUCE")
+else()
+    set(_JUCE_PATH_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE")
+endif()
+set(JUCE_PATH "${_JUCE_PATH_DEFAULT}" CACHE PATH "Path to a local JUCE checkout")
+
+if(EXISTS "${JUCE_PATH}/CMakeLists.txt")
+    add_subdirectory("${JUCE_PATH}" ${CMAKE_BINARY_DIR}/JUCE)
+else()
+    include(FetchContent)
+    FetchContent_Declare(JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG        8.0.10
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(JUCE)
+endif()
 # ============================================================================
 # プラグイン定義
 # ============================================================================
@@ -67,10 +83,22 @@ target_include_directories(Ambience PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/GUI
 )
 # ============================================================================
+# 工場プリセットの埋め込み (Embedded factory presets)
+# ============================================================================
+file(GLOB AMBIENCE_FACTORY_PRESETS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Presets/*.ambpreset")
+
+juce_add_binary_data(AmbienceFactoryPresets
+    NAMESPACE   FactoryPresets
+    HEADER_NAME FactoryPresets.h
+    SOURCES     ${AMBIENCE_FACTORY_PRESETS})
+
+# ============================================================================
 # JUCE モジュール
 # ============================================================================
 target_link_libraries(Ambience
     PRIVATE
+        AmbienceFactoryPresets
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
@@ -109,6 +137,12 @@ if(MSVC)
         /W3
         /wd4819
         $<$<CONFIG:Release>:/O2 /fp:fast>
+    )
+else()
+    target_compile_options(Ambience PRIVATE
+        -mavx2
+        -mfma
+        $<$<CONFIG:Release>:-O3 -ffast-math>
     )
 endif()
 # ============================================================================

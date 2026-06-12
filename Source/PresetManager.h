@@ -48,6 +48,7 @@ public:
 
 private:
     void       refreshPresetList();
+    void       seedFactoryPresetsIfNeeded();
     juce::File getPresetFile(const juce::String& name) const;
 
     FDNReverbAudioProcessor& processor;

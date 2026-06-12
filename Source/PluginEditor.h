@@ -15,10 +15,16 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
     void updatePanelVisibility();
+
+    // ─── UI scale (click the "AMBIENCE" title to change) ───
+    void setEditorScale(float newScale);
+    void showScaleMenu();
+    float scale{ 1.0f };
 
     // ─── プリセット UI ヘルパー ───
     void refreshPresetCombo();

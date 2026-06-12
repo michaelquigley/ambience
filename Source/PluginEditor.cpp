@@ -31,13 +31,16 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     vuOut("OUT", VUMeter::Side::Output)
 {
     setLookAndFeel(&laf);
-    setSize(W, H);
+    setSize(juce::roundToInt(W * scale), juce::roundToInt(H * scale));
 
-    // ── Title ──
+    // ── Title (click to open UI scale menu) ──
     titleLabel.setText("AMBIENCE", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(juce::FontOptions(
         "Helvetica Neue", 14.f, juce::Font::bold)));
     titleLabel.setColour(juce::Label::textColourId, AmbienceColors::TextPrimary);
+    titleLabel.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    titleLabel.setTooltip("Click for UI scale options");
+    titleLabel.addMouseListener(this, false);
     addAndMakeVisible(titleLabel);
 
     addAndMakeVisible(algoSelector);
@@ -475,6 +478,13 @@ void FDNReverbEditor::resized()
     labelC80Value.setBounds(metricsLeft + captionW, metricsRow2Y, valueW, metricsRowH);
     labelEDTCaption.setBounds(metricsLeft + colW + colSpacing, metricsRow2Y, captionW, metricsRowH);
     labelEDTValue.setBounds(metricsLeft + colW + colSpacing + captionW, metricsRow2Y, valueW, metricsRowH);
+
+    // Apply UI scale: child bounds above are in unscaled (design) coordinates.
+    const auto transform = (std::abs(scale - 1.0f) < 0.001f)
+        ? juce::AffineTransform()
+        : juce::AffineTransform::scale(scale);
+    for (auto* c : getChildren())
+        c->setTransform(transform);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -482,6 +492,9 @@ void FDNReverbEditor::resized()
 // ─────────────────────────────────────────────────────────────────────────────
 void FDNReverbEditor::paint(juce::Graphics& g)
 {
+    if (std::abs(scale - 1.0f) >= 0.001f)
+        g.addTransform(juce::AffineTransform::scale(scale));
+
     g.fillAll(AmbienceColors::Background);
     juce::ColourGradient grad(
         AmbienceColors::Surface.withAlpha(0.12f), 0.f, 0.f,
@@ -663,4 +676,45 @@ void FDNReverbEditor::deleteCurrentPreset()
             }),
         true
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  UI scale: click the "AMBIENCE" title → zoom menu
+// ─────────────────────────────────────────────────────────────────────────────
+void FDNReverbEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.eventComponent == &titleLabel)
+        showScaleMenu();
+}
+
+void FDNReverbEditor::setEditorScale(float newScale)
+{
+    scale = juce::jlimit(0.5f, 3.0f, newScale);
+    setSize(juce::roundToInt(W * scale), juce::roundToInt(H * scale));
+    resized();
+    repaint();
+}
+
+void FDNReverbEditor::showScaleMenu()
+{
+    static constexpr std::array<float, 6> kScales { 0.75f, 1.00f, 1.25f, 1.50f, 1.75f, 2.00f };
+
+    juce::PopupMenu m;
+    m.addSectionHeader("UI Scale");
+    for (int i = 0; i < (int) kScales.size(); ++i)
+    {
+        const float s = kScales[(size_t) i];
+        const bool ticked = std::abs(scale - s) < 0.001f;
+        m.addItem(i + 1,
+            juce::String(juce::roundToInt(s * 100.0f)) + "%",
+            true, ticked);
+    }
+
+    juce::Component::SafePointer<FDNReverbEditor> safeThis(this);
+    m.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(&titleLabel),
+        [safeThis](int result) {
+            if (safeThis == nullptr || result <= 0) return;
+            safeThis->setEditorScale(kScales[(size_t)(result - 1)]);
+        });
 }

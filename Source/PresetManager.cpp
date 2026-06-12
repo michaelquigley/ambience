@@ -1,10 +1,47 @@
 #include "PresetManager.h"
 #include "PluginProcessor.h"
+#include "FactoryPresets.h"
 
 PresetManager::PresetManager(FDNReverbAudioProcessor& p)
     : processor(p)
 {
+    seedFactoryPresetsIfNeeded();
     refreshPresetList();
+}
+
+// Extract the bundled factory presets to the user folder on first run.
+// A marker file ensures that presets the user deletes stay deleted across launches.
+void PresetManager::seedFactoryPresetsIfNeeded()
+{
+    auto folder = getPresetsFolder();
+    auto marker = folder.getChildFile(".factory_installed_v1");
+    if (marker.existsAsFile())
+        return;
+
+    for (int i = 0; i < FactoryPresets::namedResourceListSize; ++i)
+    {
+        const char* resName = FactoryPresets::namedResourceList[i];
+        const char* origName = FactoryPresets::getNamedResourceOriginalFilename(resName);
+        if (origName == nullptr)
+            continue;
+
+        juce::String filename(origName);
+        if (!filename.endsWithIgnoreCase(kExtension))
+            continue;
+
+        auto outFile = folder.getChildFile(filename);
+        if (outFile.existsAsFile())
+            continue;
+
+        int dataSize = 0;
+        const char* data = FactoryPresets::getNamedResource(resName, dataSize);
+        if (data == nullptr || dataSize <= 0)
+            continue;
+
+        outFile.replaceWithData(data, static_cast<size_t>(dataSize));
+    }
+
+    marker.create();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
