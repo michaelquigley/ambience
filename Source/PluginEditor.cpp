@@ -31,6 +31,11 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     vuOut("OUT", VUMeter::Side::Output)
 {
     setLookAndFeel(&laf);
+
+    // 前回使用した UI 倍率を読み出し、setSize の前に scale を確定させる。
+    uiSettings.reset(new juce::PropertiesFile(uiSettingsOptions()));
+    scale = juce::jlimit(0.5f, 3.0f, (float) uiSettings->getDoubleValue("uiScale", 1.0));
+
     setSize(juce::roundToInt(W * scale), juce::roundToInt(H * scale));
 
     // ── Title (click to open UI scale menu) ──
@@ -68,6 +73,17 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     BK(kDuckRel, "duckrelease", "RELEASE");
     BK(kLoCutNorm, "locut", "LO CUT");
     BK(kHiCutNorm, "hicut", "HI CUT");
+
+    // ── Mix lock トグル (Wet/Dry の隣) ──
+    mixLockButton.setClickingTogglesState(true);
+    mixLockButton.setToggleState(p.isMixLocked(), juce::dontSendNotification);
+    mixLockButton.setTooltip(
+        "Lock Wet/Dry \xe2\x80\x94 keeps the mix when switching presets (use as a send)");
+    mixLockButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    mixLockButton.onClick = [this] {
+        audioProcessor.setMixLocked(mixLockButton.getToggleState());
+    };
+    addAndMakeVisible(mixLockButton);
 
     // ── ProMode ボタン ──
     proModeButton.setButtonText("PRO");
@@ -246,6 +262,13 @@ FDNReverbEditor::FDNReverbEditor(FDNReverbAudioProcessor& p)
     // ─── 変更後 ───
     refreshPresetCombo();     // ★ 追加：起動時にコンボを初期化
     updatePanelVisibility();
+
+    // 明示的なレイアウトパス。コンストラクタ冒頭の setSize() が発火させる
+    // resized() は子コンポーネントがまだ生成される前に走るため、スケール
+    // トランスフォームが空の子集合に適用されてしまう。起動時の scale が
+    // 100% 以外でも (永続化された倍率を読み込んだ場合など) 確実に全ての子へ
+    // トランスフォームを行き渡らせるため、全構築後にもう一度 resized() を呼ぶ。
+    resized();
     startTimerHz(60);
 }
 
@@ -270,6 +293,11 @@ void FDNReverbEditor::timerCallback()
         audioProcessor.getOutputRMSR());
     vuIn.repaint();
     vuOut.repaint();
+
+    // ロック状態がセッション復元など UI 外で変わった場合に追従させる
+    if (mixLockButton.getToggleState() != audioProcessor.isMixLocked())
+        mixLockButton.setToggleState(audioProcessor.isMixLocked(),
+                                     juce::dontSendNotification);
 
     static int metricsCounter = 0;
     if (++metricsCounter >= 2) {
@@ -309,6 +337,10 @@ void FDNReverbEditor::updatePanelVisibility()
 
     const bool showNormal = !isProMode;
     const bool showPro = isProMode;
+
+    // MIX セクションは Normal モードのみ。ロックトグルもそれに追従させる
+    // (機能としてのロックはモードに関係なく processor 側で常に有効)。
+    mixLockButton.setVisible(showNormal);
 
     setKnob(kPreDelay, showNormal);
     setKnob(kRoomSize, showNormal);
@@ -361,6 +393,9 @@ void FDNReverbEditor::resized()
     vuOut.setBounds(W - 120, Y_HEADER + 2, 96, 28);
 
     algoSelector.setBounds(PAD, Y_ALGO, W - PAD * 2, 30);
+
+    // Mix lock トグルは "MIX" セクションラベルの右隣に置く (Normal モードのみ表示)
+    mixLockButton.setBounds(PAD + 30, Y_SLABEL2, 13, 13);
 
     auto place1 = [&](ArcKnob& k, int& x, int y) {
         k.label.setBounds(x, y, KNOB_W, KNOB_LBL_H);
@@ -693,6 +728,31 @@ void FDNReverbEditor::setEditorScale(float newScale)
     setSize(juce::roundToInt(W * scale), juce::roundToInt(H * scale));
     resized();
     repaint();
+
+    // グローバルに永続化 → 次に開くインスタンスは同じ倍率で起動する
+    if (uiSettings != nullptr)
+    {
+        uiSettings->setValue("uiScale", (double) scale);
+        uiSettings->saveIfNeeded();
+    }
+}
+
+juce::PropertiesFile::Options FDNReverbEditor::uiSettingsOptions()
+{
+    juce::PropertiesFile::Options o;
+    o.applicationName     = "scale";       // → scale.settings
+    o.filenameSuffix      = "settings";
+    o.osxLibrarySubFolder = "Application Support";
+   #if JUCE_LINUX || JUCE_BSD
+    // JUCE's Linux path formula is File("~").getChildFile(folderName) — it does NOT
+    // prepend ~/.config. Spell out the XDG location so the file lands at
+    // ~/.config/Ambience/scale.settings instead of cluttering ~/Ambience/.
+    o.folderName          = ".config/Ambience";
+   #else
+    // Windows/macOS append folderName under the app-data / Application-Support root.
+    o.folderName          = "Ambience";
+   #endif
+    return o;
 }
 
 void FDNReverbEditor::showScaleMenu()

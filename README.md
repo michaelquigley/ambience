@@ -6,6 +6,25 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![Downloads](https://img.shields.io/github/downloads/OTODESK4193/Ambience1.0.1/total.svg)
 
+> ## 🐧 Linux fork
+>
+> This is a **Linux-focused fork** of **[Ambience by OTODESK (@kijyoumusic)](https://github.com/OTODESK4193/Ambience1.0.1)**. The plugin, its DSP, and all of the documentation below are the original author's work — **full credit belongs to them**, and we encourage you to support the upstream project.
+>
+> The upstream tree targets **Windows + MSVC only**. This fork exists to **build and maintain Ambience on Linux** without changing the DSP. On top of the upstream code it adds:
+>
+> - **Linux build support** — CMake portability only (GCC/Clang flags, flexible JUCE location via `$JUCE_PATH`); no source changes to the audio engine.
+> - **Embedded factory presets** — the 21 `.ambpreset` files are baked into the binary and auto-extracted to your preset folder on first launch (no manual copy step).
+> - **Resizable UI** — a zoom menu (75 %–200 %) whose chosen scale persists across sessions.
+> - **Lockable Wet/Dry mix** — optionally keep the mix fixed while auditioning presets, so Ambience works cleanly on an aux/send.
+>
+> On Linux, presets live at `~/.local/share/Ambience/Presets/` (XDG) and the UI scale at `~/.config/Ambience/scale.settings`. Build instructions and the rationale behind every change are in **[AGENTS.md](AGENTS.md)**.
+>
+> **Upstream:** [OTODESK4193/Ambience1.0.1](https://github.com/OTODESK4193/Ambience1.0.1) &nbsp;·&nbsp; **This fork:** [michaelquigley/ambience](https://github.com/michaelquigley/ambience)
+>
+> *Everything below this line is the original author's README, preserved as-is.*
+
+---
+
 ##
 <img src="Source/Assets/Screenshot1.jpg" width="600">
 

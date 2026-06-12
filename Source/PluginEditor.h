@@ -6,6 +6,68 @@
 #include "GUI/AmbienceUI.h"
 #include "GUI/DecayCurveViz.h"
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  MixLockButton
+// ─────────────────────────────────────────────────────────────────────────────
+//  Wet/Dry の隣に置く小さな南京錠トグル。ベクター描画なので任意のズーム倍率で
+//  クリアに表示される (Assets / BinaryData は不要)。
+//    ロック時   : 閉じた南京錠 + Accent カラー
+//    アンロック時: シャックルを持ち上げた南京錠 + 減光グレー
+// ─────────────────────────────────────────────────────────────────────────────
+class MixLockButton : public juce::Button
+{
+public:
+    MixLockButton() : juce::Button("mixlock") {}
+
+    void paintButton(juce::Graphics& g,
+                     bool shouldDrawButtonAsHighlighted,
+                     bool /*shouldDrawButtonAsDown*/) override
+    {
+        auto b = getLocalBounds().toFloat().reduced(0.5f);
+        const bool locked = getToggleState();
+        const auto col = locked
+            ? AmbienceColors::Accent
+            : AmbienceColors::TextSecondary.withAlpha(shouldDrawButtonAsHighlighted ? 0.9f : 0.55f);
+
+        const float w = b.getWidth();
+        const float h = b.getHeight();
+
+        // ── 本体 (ロック部) ──
+        const float bodyW = w * 0.74f;
+        const float bodyH = h * 0.50f;
+        juce::Rectangle<float> body(b.getCentreX() - bodyW * 0.5f,
+                                    b.getBottom() - bodyH,
+                                    bodyW, bodyH);
+
+        // ── シャックル ──
+        const float r  = w * 0.22f;
+        const float cx = b.getCentreX();
+        // アンロック時はシャックルを少し持ち上げ、右脚を本体から離して「開」を表現
+        const float lift   = locked ? 0.0f : h * 0.16f;
+        const float arcCY  = body.getY() - h * 0.06f - lift;
+        const float legBot = locked ? body.getY() : body.getY() - h * 0.18f;
+
+        juce::Path shackle;
+        shackle.addCentredArc(cx, arcCY, r, r, 0.0f,
+                              -juce::MathConstants<float>::halfPi,
+                               juce::MathConstants<float>::halfPi, true);
+        shackle.lineTo(cx + r, legBot);                 // 右脚
+        shackle.startNewSubPath(cx - r, arcCY);
+        shackle.lineTo(cx - r, body.getY());            // 左脚 (常に本体へ接続)
+
+        g.setColour(col);
+        g.strokePath(shackle, juce::PathStrokeType(
+            juce::jmax(1.0f, w * 0.10f),
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.fillRoundedRectangle(body, juce::jmax(1.0f, w * 0.10f));
+
+        // ── 鍵穴 ──
+        g.setColour(AmbienceColors::Background);
+        const float kh = w * 0.16f;
+        g.fillEllipse(cx - kh * 0.5f, body.getCentreY() - kh * 0.7f, kh, kh);
+    }
+};
+
 class FDNReverbEditor : public juce::AudioProcessorEditor,
     private juce::Timer
 {
@@ -25,6 +87,11 @@ private:
     void setEditorScale(float newScale);
     void showScaleMenu();
     float scale{ 1.0f };
+
+    // 最後に選んだ UI 倍率をグローバルに永続化し、新規インスタンスへ引き継ぐ。
+    // 保存先: ~/.config/Ambience/scale.settings (OS ごとに JUCE が解決)
+    std::unique_ptr<juce::PropertiesFile> uiSettings;
+    static juce::PropertiesFile::Options  uiSettingsOptions();
 
     // ─── プリセット UI ヘルパー ───
     void refreshPresetCombo();
@@ -47,6 +114,7 @@ private:
     juce::Label labelC80Caption, labelC80Value;
     juce::Label labelEDTCaption, labelEDTValue;
 
+    MixLockButton    mixLockButton;   // Wet/Dry をプリセット切り替えから保護
     juce::TextButton proModeButton;
     juce::TextButton erSoloButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> proModeAttachment;

@@ -49,9 +49,23 @@ void PresetManager::seedFactoryPresetsIfNeeded()
 // ─────────────────────────────────────────────────────────────────────────────
 juce::File PresetManager::getPresetsFolder() const
 {
+   #if JUCE_LINUX || JUCE_BSD
+    // userDocumentsDirectory honours XDG_DOCUMENTS_DIR, which on some setups points at
+    // $HOME (e.g. XDG_DOCUMENTS_DIR="$HOME/") — that would dump the preset folder straight
+    // into the home directory. Use the XDG data location instead: $XDG_DATA_HOME, or its
+    // spec default ~/.local/share. JUCE has no special-location enum for this, so resolve
+    // it by hand.
+    auto xdgData = juce::SystemStats::getEnvironmentVariable("XDG_DATA_HOME", {}).trim();
+    auto base = xdgData.isNotEmpty()
+        ? juce::File(xdgData)
+        : juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(".local/share");
+    auto folder = base.getChildFile(kSubFolder);
+   #else
+    // Windows/macOS: Documents/Ambience/Presets — a visible, user-managed location.
     auto folder = juce::File::getSpecialLocation(
         juce::File::userDocumentsDirectory)
         .getChildFile(kSubFolder);
+   #endif
     if (!folder.exists())
         folder.createDirectory();
     return folder;
@@ -115,7 +129,32 @@ bool PresetManager::loadPreset(const juce::String& name)
     juce::MemoryBlock data;
     if (!file.loadFileAsData(data)) return false;
 
+    // ─── Mix lock ───
+    // ロック中はプリセット適用が Wet/Dry を上書きしないよう、正規化値を退避する。
+    // ロックフラグ自体も退避する: プリセットファイルに古い mixLocked が
+    // 含まれていても、ライブのロック状態が切り替わらないようにするため。
+    const bool lock = processor.isMixLocked();
+    float wet01 = 0.0f, dry01 = 0.0f;
+    auto* wetParam = processor.apvts.getParameter(FDNReverb::ParamID::WetLevel);
+    auto* dryParam = processor.apvts.getParameter(FDNReverb::ParamID::DryLevel);
+    if (lock)
+    {
+        if (wetParam != nullptr) wet01 = wetParam->getValue();
+        if (dryParam != nullptr) dry01 = dryParam->getValue();
+    }
+
     processor.setStateInformation(data.getData(), static_cast<int>(data.getSize()));
+
+    // setStateInformation はプリセット内の mixLocked を読み込んでしまうので、
+    // ライブのロック状態を必ず復元する。
+    processor.setMixLocked(lock);
+    if (lock)
+    {
+        // ホストと UI のノブに反映させるため setValueNotifyingHost で書き戻す。
+        if (wetParam != nullptr) wetParam->setValueNotifyingHost(wet01);
+        if (dryParam != nullptr) dryParam->setValueNotifyingHost(dry01);
+    }
+
     currentPresetName = name;
     if (onPresetLoaded) onPresetLoaded(name);
     return true;

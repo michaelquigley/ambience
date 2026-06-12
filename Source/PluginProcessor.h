@@ -77,6 +77,9 @@ private:
 // Processor 側でプリセット名のみ保持してセッション保存に対応する。
     juce::String lastSavedPresetName;
 
+    // ロックされた Wet/Dry をプリセット切り替えから保護する (詳細は setMixLocked)
+    bool mixLocked{ false };
+
 public:
     // エディターから呼び出してプリセット名を Processor に通知する
     void setLastSavedPresetName(const juce::String& name) noexcept {
@@ -85,6 +88,14 @@ public:
     juce::String getLastSavedPresetName() const noexcept {
         return lastSavedPresetName;
     }
+
+    // ─── Mix lock ───
+    // ロック中は PresetManager::loadPreset がプリセット適用の前後で
+    // Wet/Dry を退避・復元する。これによりプラグインを send 上で使う際、
+    // プリセット切り替えがミックス比を変更しなくなる。
+    // フラグは getStateInformation/setStateInformation でセッションに保存される。
+    void setMixLocked(bool locked) noexcept { mixLocked = locked; }
+    bool isMixLocked() const noexcept { return mixLocked; }
 
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FDNReverbAudioProcessor)

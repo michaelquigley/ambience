@@ -8,16 +8,31 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ============================================================================
 # JUCE
 # ============================================================================
+# Resolution order for a local JUCE checkout:
+#   1. -DJUCE_PATH=/abs/path   explicit configure flag (highest priority)
+#   2. $ENV{JUCE_PATH}         set once in your shell profile, works from any repo location
+#   3. ../JUCE                 sibling directory (C:/JUCE on Windows)
+#   4. FetchContent            clone JUCE 8.0.10 over the network (last resort)
 if(WIN32)
-    set(_JUCE_PATH_DEFAULT "C:/JUCE")
+    set(_JUCE_PATH_FALLBACK "C:/JUCE")
 else()
-    set(_JUCE_PATH_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE")
+    set(_JUCE_PATH_FALLBACK "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE")
+endif()
+
+# Seed the default from $JUCE_PATH when no -DJUCE_PATH was given. An explicit -D
+# always wins because it populates the cache entry before this runs.
+if(NOT DEFINED JUCE_PATH AND DEFINED ENV{JUCE_PATH})
+    set(_JUCE_PATH_DEFAULT "$ENV{JUCE_PATH}")
+else()
+    set(_JUCE_PATH_DEFAULT "${_JUCE_PATH_FALLBACK}")
 endif()
 set(JUCE_PATH "${_JUCE_PATH_DEFAULT}" CACHE PATH "Path to a local JUCE checkout")
 
 if(EXISTS "${JUCE_PATH}/CMakeLists.txt")
+    set(_JUCE_SOURCE "local checkout: ${JUCE_PATH}")
     add_subdirectory("${JUCE_PATH}" ${CMAKE_BINARY_DIR}/JUCE)
 else()
+    set(_JUCE_SOURCE "FetchContent (juce-framework/JUCE @ 8.0.10)")
     include(FetchContent)
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -154,6 +169,6 @@ juce_generate_juce_header(Ambience)
 # ============================================================================
 message(STATUS "===========================================")
 message(STATUS "Ambience VST3 - CMake Configuration")
-message(STATUS "JUCE: C:/JUCE")
+message(STATUS "JUCE: ${_JUCE_SOURCE}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "===========================================")

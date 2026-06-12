@@ -151,6 +151,9 @@ void FDNReverbAudioProcessor::getStateInformation(juce::MemoryBlock& d) {
     if (lastSavedPresetName.isNotEmpty())
         state.setProperty("currentPresetName", lastSavedPresetName, nullptr);
 
+    // Mix lock はパラメータではなくセッション固有のフラグとして保存する
+    state.setProperty("mixLocked", mixLocked, nullptr);
+
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, d);
 }
@@ -162,6 +165,11 @@ void FDNReverbAudioProcessor::setStateInformation(const void* d, int s) {
 
         // ★ 修正: プリセット名を復元
         lastSavedPresetName = tree.getProperty("currentPresetName", "").toString();
+
+        // セッション復元時はロック状態をそのまま反映する。
+        // プリセット読み込み経由の場合は PresetManager::loadPreset が
+        // 呼び出し前後で本来の値に戻すため、ここで上書きされても問題ない。
+        mixLocked = (bool) tree.getProperty("mixLocked", false);
 
         apvts.replaceState(tree);
         paramsNeedUpdate = true;
