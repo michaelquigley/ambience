@@ -1,7 +1,7 @@
 # Ambience
 
 ![Release](https://img.shields.io/badge/release-v1.1.0-blue)
-![License](https://img.shields.io/badge/license-GPLv3-green)
+![License](https://img.shields.io/badge/license-AGPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![Downloads](https://img.shields.io/github/downloads/OTODESK4193/Ambience1.0.1/total.svg)
