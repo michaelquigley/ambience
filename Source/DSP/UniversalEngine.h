@@ -37,6 +37,21 @@ namespace FDNReverb {
         }
     };
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    //  ChorusLFO: 正弦波位相アキュムレータ（コーラス型ピッチモジュレーション）
+    // ─────────────────────────────────────────────────────────────────────────────
+    struct ChorusLFO {
+        float phase{ 0.0f };
+        float phaseInc{ 0.0f };
+        float rateScale{ 1.0f };   // チャンネル固有のレート係数（黄金比分布）
+
+        inline float tick() noexcept {
+            phase += phaseInc;
+            if (phase >= 1.0f) phase -= 1.0f;
+            return std::sin(phase * 6.28318530718f);
+        }
+    };
+
     class UniversalEngine {
     public:
         UniversalEngine();
@@ -86,6 +101,7 @@ namespace FDNReverb {
         ReverbTopology  currentTopology{ ReverbTopology::Room };
 
         static constexpr int FDN_ORDER = 16;
+        static constexpr int SERIAL_APF_STAGES = 3;  // ★ シリアルAllpassチェーン段数
 
         // ★ PreDelay ディレイライン (最大500ms)
         LinearDelayLine                              preDelayLine;
@@ -95,7 +111,7 @@ namespace FDNReverb {
         std::array<float, 16>                        erTaps;
         std::array<LinearDelayLine, 4>               inputDiffusers;
         std::array<LinearDelayLine, FDN_ORDER>       fdnDelays;
-        std::array<LinearDelayLine, FDN_ORDER>       nestedAllpassDelays;
+        std::array<std::array<LinearDelayLine, SERIAL_APF_STAGES>, FDN_ORDER> nestedAllpassDelays;
 
         int                            currentERTapCount{ 0 };
         std::array<float, MAX_ER_TAPS> currentERDelaySamples;
@@ -117,6 +133,7 @@ namespace FDNReverb {
 #endif
 
         std::array<BandlimitedNoiseLFO, FDN_ORDER> lfos;
+        std::array<ChorusLFO, FDN_ORDER>           chorusLFOs;  // ★ コーラス型ピッチモジュレーション
         std::array<float, FDN_ORDER>               fdnBaseDelaySamples;
         std::array<float, FDN_ORDER>               fbVec;
 

@@ -1,6 +1,6 @@
 # Ambience
 
-![Release](https://img.shields.io/badge/release-v1.0.1-blue)
+![Release](https://img.shields.io/badge/release-v1.1.0-blue)
 ![License](https://img.shields.io/badge/license-GPLv3-green)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.x-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -8,6 +8,14 @@
 
 ##
 <img src="Source/Assets/Screenshot1.jpg" width="600">
+
+## Changelog
+
+### v1.1.0
+
+- **PreDelay修正**: PreDelayパラメータがDSPに反映されていなかった問題を修正。ER・FDN両方に正しく適用されるように改善。
+- **金属的コムフィルタ音の改善**: DecayTime増大時に発生していた金属的な響きを、DCブロッカー追加・Decay依存マイクロサチュレーション・モジュレーション深度スケーリング・ネステッドAllpass動的変調の4点で対策。
+- **プリセット選択時のPROモード問題修正**: プリセットロード後にPROモードが復元されてしまう問題を修正し、常にNormalモードに戻るように変更。
 
 ## Overview
 

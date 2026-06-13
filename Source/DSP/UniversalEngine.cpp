@@ -45,6 +45,12 @@ namespace FDNReverb {
             const float angle = static_cast<float>(i) * phi;
             const float frac = angle - std::floor(angle);
             lfos[i].rateMultiplier = 0.80f + frac * 0.40f;
+
+            // ★ コーラスLFO: ノイズLFOとは異なるオフセットで黄金比分布
+            const float cAngle = static_cast<float>(i + 5) * phi;
+            chorusLFOs[i].phase = cAngle - std::floor(cAngle);
+            const float cRateAngle = static_cast<float>(i + 11) * phi;
+            chorusLFOs[i].rateScale = 0.30f + (cRateAngle - std::floor(cRateAngle)) * 0.50f;
         }
     }
 
@@ -66,7 +72,7 @@ namespace FDNReverb {
             + getPow2(static_cast<size_t>(fs * 1.0))
             + getPow2(static_cast<size_t>(fs * 0.05)) * 4
             + getPow2(static_cast<size_t>(fs * 0.5)) * FDN_ORDER
-            + getPow2(static_cast<size_t>(fs * 0.1)) * FDN_ORDER;
+            + getPow2(static_cast<size_t>(fs * 0.05)) * FDN_ORDER * SERIAL_APF_STAGES;
 
         memoryPool.allocate(totalMemoryNeeded);
 
@@ -88,8 +94,10 @@ namespace FDNReverb {
         for (int i = 0; i < FDN_ORDER; ++i) {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.5), mask);
             fdnDelays[i].init(ptr, mask);
-            ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.1), mask);
-            nestedAllpassDelays[i].init(ptr, mask);
+            for (int s = 0; s < SERIAL_APF_STAGES; ++s) {
+                ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.05), mask);
+                nestedAllpassDelays[i][s].init(ptr, mask);
+            }
         }
 
         acousticMetrics.prepare(sampleRate, 2000.0f);
@@ -416,6 +424,8 @@ namespace FDNReverb {
                 const float fc = activeParams.modRate * lfos[i].rateMultiplier;
                 lfoCoeffs[i] = juce::jlimit(0.0001f, 0.9999f,
                     1.0f - std::exp(-twoPi * fc / fsf));
+                // ★ コーラスLFOレート更新
+                chorusLFOs[i].phaseInc = activeParams.modRate * chorusLFOs[i].rateScale / fsf;
             }
         }
 
@@ -487,7 +497,12 @@ namespace FDNReverb {
 
             for (int i = 0; i < FDN_ORDER; ++i) {
                 const float lfoVal = lfos[i].tick(lfoCoeffs[i]);
-                const float delaySmp = fdnBaseDelaySamples[i] + lfoVal * depthSamples;
+                // ★ コーラス型ピッチモジュレーション: 正弦波LFOをノイズLFOに加算
+                //   ノイズ = ランダムな揺らぎ（金属音抑制）
+                //   コーラス = 滑らかなピッチシフト蓄積（リッチなテール）
+                const float chorusVal = chorusLFOs[i].tick();
+                const float combinedLfo = lfoVal + chorusVal * 0.6f;
+                const float delaySmp = fdnBaseDelaySamples[i] + combinedLfo * depthSamples;
                 float d = fdnDelays[i].read(delaySmp);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
@@ -516,16 +531,28 @@ namespace FDNReverb {
                     d = d + (sat - d) * microSatBlend;
                 }
 
-                // ★ 金属音対策 (4): ネストAllpassにもモジュレーションを適用
-                //   固定遅延のallpassは特定周波数を強調してトーナルカラーリングの原因になる。
-                //   メインLFOの15%の深さで緩やかに変調し、固定パターンを破壊する。
-                const float apfModDepth = depthSamples * 0.15f;
-                const float apfDelaySmp = (1.5f + i * 0.3f) * 0.001f * static_cast<float>(fs)
-                    + lfoVal * apfModDepth;
-                float apfD = nestedAllpassDelays[i].read(apfDelaySmp);
-                float apfW = d + effectiveApfGain * apfD;
-                nestedAllpassDelays[i].write(apfW);
-                float apfOut = apfD - effectiveApfGain * apfW;
+                // ★ 3段シリアルAllpassチェーン (レイトフィールド密度改善)
+                //   1段 → 3段に拡張し、初期エコー密度を大幅に向上。
+                //   各段で異なるディレイ時間・モジュレーション深さを使用し、
+                //   トーナルカラーリングを回避。コーラスLFOも含めた複合変調。
+                float apfOut = d;
+                {
+                    constexpr float apfBaseMs[SERIAL_APF_STAGES]   = { 1.5f, 2.3f, 3.7f };
+                    constexpr float apfSpreadMs[SERIAL_APF_STAGES] = { 0.30f, 0.37f, 0.47f };
+                    constexpr float apfModFrac[SERIAL_APF_STAGES]  = { 0.15f, 0.10f, 0.07f };
+                    const float apfGainStage = effectiveApfGain * 0.78f;
+
+                    for (int s = 0; s < SERIAL_APF_STAGES; ++s) {
+                        const float apfModDepth = depthSamples * apfModFrac[s];
+                        const float apfDelaySmp = (apfBaseMs[s] + i * apfSpreadMs[s])
+                            * 0.001f * static_cast<float>(fs)
+                            + combinedLfo * apfModDepth;
+                        float apfD = nestedAllpassDelays[i][s].read(apfDelaySmp);
+                        float apfW = apfOut + apfGainStage * apfD;
+                        nestedAllpassDelays[i][s].write(apfW);
+                        apfOut = apfD - apfGainStage * apfW;
+                    }
+                }
 
                 nextFb[i] = apfOut;
 
