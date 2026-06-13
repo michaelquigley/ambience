@@ -116,6 +116,10 @@ namespace FDNReverb {
         dcX1.fill(0.0f);
         dcY1.fill(0.0f);
 
+        // ★ Soft-kneeコンプ: RMSエンベロープ係数 (~3ms窓)
+        fdnRmsEnv.fill(0.0f);
+        rmsCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.003f));
+
         reset();
     }
 
@@ -138,6 +142,8 @@ namespace FDNReverb {
         duckingEnvelope = 0.0f;
         dcX1.fill(0.0f);
         dcY1.fill(0.0f);
+        fdnRmsEnv.fill(0.0f);
+        for (auto& dl : fdnDelays) dl.resetState();  // ★ Thiran allpass状態リセット
         for (auto& lfo : lfos) lfo.smoothed = 0.0f;
     }
 
@@ -488,6 +494,13 @@ namespace FDNReverb {
                 erOutR = erTotalR;
             }
 
+            // ★ ER→Late遷移スムージング: ER出力をFDN入力にフィード
+            //   実空間では初期反射が壁面で反射を繰り返しLate Reverbを生成する。
+            //   この自然な遷移を模擬し、ERとLateの境界を滑らかにする。
+            if (!bypassER) {
+                fdnInputMid += (erOutL + erOutR) * 0.5f * 0.15f;
+            }
+
             std::array<float, 16> currentFb = fbVec;
             fastWalshHadamardTransform(currentFb);
             applySignFlipping(currentFb);
@@ -502,7 +515,15 @@ namespace FDNReverb {
                 //   コーラス = 滑らかなピッチシフト蓄積（リッチなテール）
                 const float chorusVal = chorusLFOs[i].tick();
                 const float combinedLfo = lfoVal + chorusVal * 0.6f;
-                const float delaySmp = fdnBaseDelaySamples[i] + combinedLfo * depthSamples;
+
+                // ★ 周波数依存モジュレーション: 高域チャンネルを深く、低域を浅く
+                //   FDNチャンネルは短ディレイ(ch0,高域)→長ディレイ(ch15,低域)の順。
+                //   実空間では空気の揺らぎが高域に強く影響し、低域は安定。
+                //   ch0: 1.5x depth, ch15: 0.5x depth
+                const float freqModScale = 0.5f + (1.0f - static_cast<float>(i)
+                    / static_cast<float>(FDN_ORDER - 1)) * 1.0f;
+                const float delaySmp = fdnBaseDelaySamples[i]
+                    + combinedLfo * depthSamples * freqModScale;
                 float d = fdnDelays[i].read(delaySmp);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
@@ -521,6 +542,20 @@ namespace FDNReverb {
                     dcX1[i] = dcIn;
                     dcY1[i] = dcOut;
                     d = dcOut;
+                }
+
+                // ★ Soft-kneeコンプレッション (FDNフィードバックループ)
+                //   RMSエンベロープでレベルを追従し、閾値超過分をソフトに圧縮。
+                //   マイクロサチュレーションの高調波歪みなしに透明なレベル制御を実現。
+                //   長い残響で特に効果的（Pro-R / Valhalla 等の手法）。
+                {
+                    fdnRmsEnv[i] += (d * d - fdnRmsEnv[i]) * rmsCoeff;
+                    const float env = std::sqrt(std::max(fdnRmsEnv[i], 1e-12f));
+                    constexpr float compThresh = 0.35f;
+                    if (env > compThresh) {
+                        const float over = env - compThresh;
+                        d *= compThresh / (compThresh + over * 0.65f);
+                    }
                 }
 
                 // ★ 金属音対策 (1): Decay依存マイクロサチュレーション
@@ -546,7 +581,7 @@ namespace FDNReverb {
                         const float apfModDepth = depthSamples * apfModFrac[s];
                         const float apfDelaySmp = (apfBaseMs[s] + i * apfSpreadMs[s])
                             * 0.001f * static_cast<float>(fs)
-                            + combinedLfo * apfModDepth;
+                            + combinedLfo * apfModDepth * freqModScale;
                         float apfD = nestedAllpassDelays[i][s].read(apfDelaySmp);
                         float apfW = apfOut + apfGainStage * apfD;
                         nestedAllpassDelays[i][s].write(apfW);

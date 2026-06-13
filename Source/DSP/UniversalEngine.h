@@ -110,7 +110,7 @@ namespace FDNReverb {
         LinearDelayLine                              erDelay;
         std::array<float, 16>                        erTaps;
         std::array<LinearDelayLine, 4>               inputDiffusers;
-        std::array<LinearDelayLine, FDN_ORDER>       fdnDelays;
+        std::array<ThiranDelayLine, FDN_ORDER>        fdnDelays;  // ★ Thiran allpass補間
         std::array<std::array<LinearDelayLine, SERIAL_APF_STAGES>, FDN_ORDER> nestedAllpassDelays;
 
         int                            currentERTapCount{ 0 };
@@ -154,6 +154,10 @@ namespace FDNReverb {
         std::array<float, FDN_ORDER> dcX1;
         std::array<float, FDN_ORDER> dcY1;
         float dcBlockerCoeff{ 0.999f };
+
+        // ★ Soft-kneeコンプレッション: FDNフィードバックループ内
+        std::array<float, FDN_ORDER> fdnRmsEnv;
+        float rmsCoeff{ 0.002f };
 
         std::array<float, NUM_BANDS> effectiveRT60;
         float theoreticalEDT{ 0.0f };

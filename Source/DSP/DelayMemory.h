@@ -75,4 +75,60 @@ namespace FDNReverb {
         int writeIndex{ 0 };
     };
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Thiran Allpass補間ディレイライン（フラット位相応答）
+    //   線形補間は高域を減衰させる（sinc(πf)特性）が、Thiran allpassは
+    //   |H(ω)|=1 を維持するため、FDNフィードバックループ内の高域透明感が向上。
+    // ─────────────────────────────────────────────────────────────────────────────
+    class ThiranDelayLine {
+    public:
+        void init(float* memory, int bitmask) {
+            buffer = memory;
+            mask = bitmask;
+            writeIndex = 0;
+            thiranX1 = 0.0f;
+            thiranY1 = 0.0f;
+        }
+
+        void resetState() noexcept {
+            thiranX1 = 0.0f;
+            thiranY1 = 0.0f;
+        }
+
+        // Thiran 1次 allpass: y[n] = a*x[n] + x[n-1] - a*y[n-1]
+        // a = (1-D)/(1+D), D = fractional delay
+        inline float read(float delayInSamples) noexcept {
+            int id = static_cast<int>(delayInSamples);
+            float frac = delayInSamples - static_cast<float>(id);
+
+            // frac→0 で a→1 (不安定) のため下限クランプ
+            frac = std::max(frac, 0.1f);
+            const float a = (1.0f - frac) / (1.0f + frac);
+
+            uint32_t uWrite = static_cast<uint32_t>(writeIndex);
+            uint32_t uId = static_cast<uint32_t>(id);
+            uint32_t uMask = static_cast<uint32_t>(mask);
+
+            float xn = buffer[static_cast<int>((uWrite - uId) & uMask)];
+
+            float yn = a * xn + thiranX1 - a * thiranY1;
+            thiranX1 = xn;
+            thiranY1 = yn;
+
+            return yn;
+        }
+
+        inline void write(float input) noexcept {
+            buffer[writeIndex] = input;
+            writeIndex = (writeIndex + 1) & mask;
+        }
+
+    private:
+        float* buffer{ nullptr };
+        int mask{ 0 };
+        int writeIndex{ 0 };
+        float thiranX1{ 0.0f };
+        float thiranY1{ 0.0f };
+    };
+
 } // namespace FDNReverb
