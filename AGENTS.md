@@ -19,13 +19,15 @@ git log --no-merges 66d669c..HEAD  # all commits since the branch (fork-authored
 
 This document explains the *why* behind the fork's changes and how to build and extend it. When the code and this file disagree, the code wins — treat the prose here as intent, not as a spec to reapply. The licensing follows upstream: **AGPLv3** (upstream relicensed from GPLv3 at v1.1.0; see the `LICENSE` file).
 
-All **fork-authored** changes are confined to seven existing files plus one new non-source file (the CI workflow); there is no new C++ translation unit (upstream's own DSP changes arrive via merge and are not listed here):
+All **fork-authored** changes are confined to seven existing files plus three new non-source files; there is no new C++ translation unit (upstream's own DSP changes arrive via merge and are not listed here):
 
 - `CMakeLists.txt`
 - `Source/PresetManager.h`, `Source/PresetManager.cpp`
 - `Source/PluginEditor.h`, `Source/PluginEditor.cpp`
 - `Source/PluginProcessor.h`, `Source/PluginProcessor.cpp` (mix-lock flag + its session persistence)
 - `.github/workflows/ci.yml` (new — CI/CD, see §7)
+- `Makefile` (new — thin CMake wrapper, see §1)
+- `CHANGELOG.md` (new — in-house changelog convention, see §8)
 
 The upstream codebase is genuinely portable; almost everything below is build-system or behaviour wiring, not C++ porting work.
 
@@ -55,6 +57,8 @@ CMake 3.22+ and a C++20-capable GCC or Clang. Verified with CMake 3.28 and GCC 1
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
+
+Or via the root `Makefile`, a thin wrapper over exactly those commands: `make` (configure + Release build), `make clean` (removes `build/`), `make rebuild`. Overridable: `make BUILD_TYPE=Debug`, `make JOBS=8`, `make BUILD_DIR=out`. It passes nothing about JUCE, so the resolution order in "JUCE source resolution" below still applies.
 
 Artifacts:
 
@@ -195,6 +199,8 @@ timeout 3 build/Ambience_artefacts/Release/Standalone/Ambience
 # it sends — either just means the GUI ran for the full 3s and was killed cleanly.
 ```
 
+**Known non-issue — Standalone relaunch hang (Linux/PipeWire).** The Standalone opens an ALSA device; under PipeWire, quitting and *immediately* relaunching can hang for ~30–60s with **no window** while PipeWire releases the stream the previous instance held. It self-resolves once the device frees (or just wait a bit between launches). It is **not** a plugin bug and is **scale-independent** — do not chase it as a UI-scale issue (we did, at length; it isn't one). The VST3 in a DAW doesn't hit this, and CI never launches the GUI for the same reason (§7). Symptom note: a *correctly-sized* window that renders the UI at 100% in the top-left is a different, fixed bug (the §4 layout-ordering gotcha), not this hang.
+
 ---
 
 ## 7. Continuous integration
@@ -223,11 +229,13 @@ The fork stays mergeable with upstream because it touches a **small, known set o
 One-time setup:
 ```
 git remote add upstream https://github.com/OTODESK4193/Ambience1.0.1
+git config remote.upstream.tagOpt --no-tags   # keep upstream's tags OUT of our tag namespace
 ```
+The `--no-tags` matters: the fork cuts its own releases in the `v*` namespace (the CI `release` job keys on the tag, §7), and upstream uses the same `vX.Y.Z` scheme — fetching upstream's tags into `refs/tags/` would collide with the fork's own release tags. We track `upstream/master` (a branch ref); we do not need upstream's tags locally.
 
 Each sync:
 ```
-1. git fetch upstream --tags
+1. git fetch upstream          # NOT --tags (see above)
 2. review:  git log --oneline HEAD..upstream/master
             git diff <merge-base>..upstream/master -- <fork-owned files>   # confirm disposition
 3. git switch -c merge/upstream-<ver> master
@@ -256,6 +264,20 @@ Each sync:
 
 Last sync: **v1.1.0** (`9c6cf10`).
 
+**Changelog.** `CHANGELOG.md` follows the in-house convention (not Keep a Changelog): newest release first, each entry a prose paragraph led by `FEATURE:`, `CHANGE:`, or `FIX:` (those three tags only), ordered most-important-first within a release. New entries are always written into the pinned `## Unreleased` slot — never guess a version. The file itself is the clearest example of the format.
+
+**Cutting a fork release.** The fork tags its own releases in the `v*` namespace; the CI `release` job (§7) keys on the tag and drafts a GitHub release. The fork picks its own version number each release — it need not equal upstream's (the first release happened to align at `v1.1.0` because that's the upstream we synced). To release from `master`:
+
+```
+1. land the merge:   git switch master && git merge --ff-only merge/upstream-<ver> && git push
+2. bump CHANGELOG.md: rename `## Unreleased` → `## vX.Y.Z`, add a fresh empty `## Unreleased`; commit + push
+3. tag + push:        git tag vX.Y.Z && git push origin vX.Y.Z
+4. CI builds, statically verifies, packages the zip, and creates a DRAFT release — review it on the
+   repo's Releases page (paste the CHANGELOG entries into the body) and publish. It stays a draft until you do.
+```
+
+Gotcha: if you ever ran `git fetch upstream --tags` before the `--no-tags` config above, upstream's `vX.Y.Z` tags are sitting in your local `refs/tags/` and will block `git tag vX.Y.Z`. They never reach origin (a plain `git push` doesn't send tags). Clear them with `git tag -d v1.0.1 v1.1.0` (they're upstream's, not the fork's).
+
 ---
 
 ## 9. Follow-ups (not bugs)
@@ -282,4 +304,6 @@ Well-defined next steps, deliberately out of scope so far:
 | `Source/PluginEditor.cpp` | Scale-aware `setSize`; title-label cursor/tooltip/listener; `g.addTransform` in `paint()`; child `setTransform` loop in `resized()`; `mouseDown` / `setEditorScale` / `showScaleMenu`; reads/writes persisted scale; places + wires + sizes `mixLockButton`, re-syncs it in `timerCallback` |
 | `Presets/*.ambpreset` | Unchanged; bundled into the binary by the CMake target above |
 | `.github/workflows/ci.yml` | CI/CD: per-commit build + static verification with artifact upload; draft release on `v*` tags (§7) |
+| `Makefile` | Thin CMake wrapper: `make` / `make clean` / `make rebuild` (§1) |
+| `CHANGELOG.md` | In-house changelog (`FEATURE`/`CHANGE`/`FIX` prose into `## Unreleased`; bumped at release, §8) |
 | `Source/DSP/EarlyReflections.{cpp,h}`, `Source/DSP/SAPFStage.{cpp,h}` | Unchanged; dead in upstream too |
