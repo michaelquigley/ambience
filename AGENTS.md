@@ -8,22 +8,24 @@ This repository is a fork of the upstream Ambience reverb (`OTODESK4193/Ambience
 2. **Embedded factory presets** — the 21 `.ambpreset` files are baked into the binary and extracted to the user's preset folder on first launch.
 3. **Resizable UI** — clicking the "AMBIENCE" title label opens a zoom menu (75% / 100% / 125% / 150% / 175% / 200%). The chosen scale persists globally, so new instances open at the last-used size.
 4. **Mix lock** — a padlock toggle by the Wet/Dry knobs; while locked, switching presets preserves the current mix, so the plugin works cleanly on a send.
+5. **Continuous integration** — a GitHub Actions workflow builds and statically verifies on every commit (artifacts downloadable per run) and drafts a release on `v*` tags.
 
-The fork point is upstream commit `66d669c`. Everything authored by this fork sits in commits on top of it, so the canonical, always-current description of what changed is the git history itself:
+The fork branched from upstream `66d669c` and **periodically merges upstream releases** (the process is in §8 "Tracking upstream"). It is currently synced to upstream **v1.1.0**. Because merged upstream commits now live in our history too, a plain `66d669c..HEAD` range no longer isolates fork-authored work — use the file-ownership map in §10 and:
 
 ```
-git log 66d669c..HEAD          # fork commits
-git diff 66d669c..HEAD         # the complete fork diff
+git diff upstream/master..HEAD     # the fork's net divergence from the latest synced upstream (our features)
+git log --no-merges 66d669c..HEAD  # all commits since the branch (fork-authored + merged-in upstream)
 ```
 
-This document explains the *why* behind those commits and how to build and extend the fork. When the code and this file disagree, the code wins — treat the prose here as intent, not as a spec to reapply.
+This document explains the *why* behind the fork's changes and how to build and extend it. When the code and this file disagree, the code wins — treat the prose here as intent, not as a spec to reapply. The licensing follows upstream: **AGPLv3** (upstream relicensed from GPLv3 at v1.1.0; see the `LICENSE` file).
 
-All fork changes are confined to seven existing files; there is no new C++ translation unit:
+All **fork-authored** changes are confined to seven existing files plus one new non-source file (the CI workflow); there is no new C++ translation unit (upstream's own DSP changes arrive via merge and are not listed here):
 
 - `CMakeLists.txt`
 - `Source/PresetManager.h`, `Source/PresetManager.cpp`
 - `Source/PluginEditor.h`, `Source/PluginEditor.cpp`
 - `Source/PluginProcessor.h`, `Source/PluginProcessor.cpp` (mix-lock flag + its session persistence)
+- `.github/workflows/ci.yml` (new — CI/CD, see §7)
 
 The upstream codebase is genuinely portable; almost everything below is build-system or behaviour wiring, not C++ porting work.
 
@@ -195,17 +197,79 @@ timeout 3 build/Ambience_artefacts/Release/Standalone/Ambience
 
 ---
 
-## 7. Follow-ups (not bugs)
+## 7. Continuous integration
+
+`.github/workflows/ci.yml` (the only file outside the seven C++/CMake files above) runs on GitHub Actions:
+
+- **`build` job** — on every push (any branch), every pull request, and `v*` tags. Runs on `ubuntu-22.04`, chosen deliberately *older* than the 24.04 dev box so the `.so` / Standalone link against an older glibc and run on more distros. Installs the apt deps, configures + builds Release, **statically verifies** the result, and uploads `Ambience.vst3` + the Standalone as a run artifact named with the short commit SHA (so each commit's build is downloadable from its run).
+- **`release` job** — only on `v*` tags. `needs: build`; it *downloads* the build job's verified artifact rather than rebuilding (so the released binary is byte-for-byte the one that passed verification), zips it as `Ambience-<tag>-linux-x86_64.zip`, and creates a **draft** GitHub release via `softprops/action-gh-release`.
+
+Things that matter if you touch the workflow:
+
+- **Reduced apt list.** CI installs *fewer* packages than §1: `libgtk-3-dev` and `libwebkit2gtk-*-dev` are dropped. With `JUCE_WEB_BROWSER=0` and no `NEEDS_WEB_BROWSER`, JUCE never requires or links them, so dropping them also sidesteps the 22.04 (`-4.0`) vs 24.04 (`-4.1`) webkit package-name split. (The §1 list is the full local-dev superset and stays correct for a desktop build.)
+- **JUCE via FetchContent.** The runner has no sibling checkout or `$JUCE_PATH`, so JUCE resolves to the FetchContent fallback (§1), cached at `build/_deps` keyed on the `8.0.10` tag + a hash of `CMakeLists.txt`.
+- **Static verification, not a launch.** The runner is headless and the standalone can hang acquiring an audio device, so CI does **not** run the GUI. It checks: the `.so` and Standalone exist, `ldd` resolves with no "not found", and all 21 embedded preset filenames appear in the `.so`. The preset check dumps `strings -a` to a file and greps the file — do **not** pipe `strings … | grep -Fq`: `-q` SIGPIPEs `strings` and `set -o pipefail` then fails the step *even on a match* (this bit once already).
+- **AVX2.** The binary is built with the unconditional `-mavx2 -mfma` (§2), so a released build requires an AVX2 CPU at runtime; the draft-release body says so. GitHub's x86_64 runners have AVX2, so build + verify pass there.
+- **Tag vs version.** A `vX.Y.Z` tag names the zip and the release but does **not** change the plugin's internal version, which is hardcoded in `CMakeLists.txt` (three places; currently `1.1.0`) — see the follow-up in §9.
+
+To test the release path without a real release: push a throwaway tag (`git tag v0.0.1-test && git push origin v0.0.1-test`), confirm a draft release with the zip appears, then delete both the draft and the tag (`git push --delete origin v0.0.1-test`).
+
+---
+
+## 8. Tracking upstream
+
+The fork stays mergeable with upstream because it touches a **small, known set of files** and never edits `Source/DSP/*`. Upstream (`OTODESK4193/Ambience1.0.1`) develops on `master` and tags releases (`v1.0.1`, `v1.1.0`, …). Our fork point `66d669c` is a true ancestor of upstream's line, so each sync is a clean three-way **merge** (we do *not* rebase — that would rewrite already-pushed history).
+
+One-time setup:
+```
+git remote add upstream https://github.com/OTODESK4193/Ambience1.0.1
+```
+
+Each sync:
+```
+1. git fetch upstream --tags
+2. review:  git log --oneline HEAD..upstream/master
+            git diff <merge-base>..upstream/master -- <fork-owned files>   # confirm disposition
+3. git switch -c merge/upstream-<ver> master
+4. git merge upstream/master            # clean base; DSP/preset/manual files merge untouched
+5. resolve ONLY the fork-owned files (conflict map below)
+6. reconcile: adopt upstream's version; keep the "Ambience" product name/`getName()`/title;
+   license tracks upstream
+7. build + run the static verification (the same checks CI runs, §7)
+8. commit the merge; push; let CI confirm
+```
+
+**Conflict map** — who owns each file when upstream and the fork both touch it:
+
+| File(s) | Stance on conflict |
+|---|---|
+| `Source/DSP/*`, `Presets/*`, `Source/Assets/*` (manuals) | **Take upstream** — the fork never edits these; they auto-merge |
+| `LICENSE` | **Take upstream** (currently AGPLv3) |
+| `CMakeLists.txt` | Keep our build logic (JUCE-path resolution, GCC/Clang flag branch, binary-data target); take upstream's **version** + product **description**; **keep `PRODUCT_NAME "Ambience"`** (reject any `Ambience1.1`-style rename) |
+| `Source/PluginProcessor.h` | Keep our `mixLocked` accessors; **keep `getName()` → "Ambience"** |
+| `Source/PluginEditor.cpp` | Keep our scale + mix-lock code; **keep title "AMBIENCE"** |
+| `Source/PresetManager.cpp` | Keep our seeding/path/mix-lock; integrate upstream hooks additively (e.g. the v1.1.0 promode-reset-on-load) |
+| `README.md` | Keep our 🐧 fork banner (top); take upstream's body/badges/changelog |
+| `AGENTS.md`, `.github/`, `.gitignore` | **Keep ours** — upstream doesn't touch them |
+
+**Naming decision (recorded):** the fork keeps the stable identifiers `PRODUCT_NAME "Ambience"` / `getName() "Ambience"` / title `"AMBIENCE"` even though upstream moved to `Ambience1.1`-style names — renaming the plugin would orphan existing DAW project references. We *do* adopt upstream's version number (so v1.1.0 features ↔ version 1.1.0; this also keeps CI release tags aligned with the internal version). The DSP is accepted wholesale (it's always-on and interleaved in `UniversalEngine.cpp` — effectively all-or-nothing).
+
+Last sync: **v1.1.0** (`9c6cf10`).
+
+---
+
+## 9. Follow-ups (not bugs)
 
 Well-defined next steps, deliberately out of scope so far:
 
 - **True layout reflow.** This fork bitmap-scales the UI. For crisp text at every scale, the absolute-pixel constants at the top of `PluginEditor.cpp` (`Y_HEADER`, `SEC_TIME`, `KNOB_W`, …) would need to become fractions-of-bounds, and the visualizer paint code would need rewriting — an order of magnitude more work than what was done.
 - **macOS build.** Should mostly "just work" now that the Linux port removed the Windows assumptions, but the GCC/Clang `else()` branch adds AVX2 flags unconditionally, which breaks on Apple Silicon. Guard with `if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")`.
 - **LV2 and CLAP formats.** JUCE 8 supports both. Adding `LV2 CLAP` to the `FORMATS` line of `juce_add_plugin` would be enough; CLAP also needs the `clap-juce-extensions` submodule.
+- **Reconcile the release tag with the plugin version.** CI (§7) names the release/zip from the `v*` tag, but `CMakeLists.txt` hardcodes `1.0.0` in three places (`project(... VERSION)`, `juce_add_plugin(... VERSION)`, `AMBIENCE_VERSION`), so a tagged build still self-reports `1.0.0`. A CI step could derive the version from the tag and pass it via `-D` (or `sed` it in) before configure.
 
 ---
 
-## 8. Where each feature lives
+## 10. Where each feature lives
 
 | File | Feature(s) |
 |---|---|
@@ -217,4 +281,5 @@ Well-defined next steps, deliberately out of scope so far:
 | `Source/PluginEditor.h` | `mouseDown` override; `scale` member; `setEditorScale` / `showScaleMenu` declarations; `uiSettings` `PropertiesFile` + `uiSettingsOptions()`; `MixLockButton` class + `mixLockButton` member |
 | `Source/PluginEditor.cpp` | Scale-aware `setSize`; title-label cursor/tooltip/listener; `g.addTransform` in `paint()`; child `setTransform` loop in `resized()`; `mouseDown` / `setEditorScale` / `showScaleMenu`; reads/writes persisted scale; places + wires + sizes `mixLockButton`, re-syncs it in `timerCallback` |
 | `Presets/*.ambpreset` | Unchanged; bundled into the binary by the CMake target above |
+| `.github/workflows/ci.yml` | CI/CD: per-commit build + static verification with artifact upload; draft release on `v*` tags (§7) |
 | `Source/DSP/EarlyReflections.{cpp,h}`, `Source/DSP/SAPFStage.{cpp,h}` | Unchanged; dead in upstream too |

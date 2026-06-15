@@ -45,6 +45,12 @@ namespace FDNReverb {
             const float angle = static_cast<float>(i) * phi;
             const float frac = angle - std::floor(angle);
             lfos[i].rateMultiplier = 0.80f + frac * 0.40f;
+
+            // ★ コーラスLFO: ノイズLFOとは異なるオフセットで黄金比分布
+            const float cAngle = static_cast<float>(i + 5) * phi;
+            chorusLFOs[i].phase = cAngle - std::floor(cAngle);
+            const float cRateAngle = static_cast<float>(i + 11) * phi;
+            chorusLFOs[i].rateScale = 0.30f + (cRateAngle - std::floor(cRateAngle)) * 0.50f;
         }
     }
 
@@ -62,15 +68,20 @@ namespace FDNReverb {
             };
 
         size_t totalMemoryNeeded =
-            getPow2(static_cast<size_t>(fs * 1.0))
+            getPow2(static_cast<size_t>(fs * 0.5))              // ★ preDelay (max 500ms)
+            + getPow2(static_cast<size_t>(fs * 1.0))
             + getPow2(static_cast<size_t>(fs * 0.05)) * 4
             + getPow2(static_cast<size_t>(fs * 0.5)) * FDN_ORDER
-            + getPow2(static_cast<size_t>(fs * 0.1)) * FDN_ORDER;
+            + getPow2(static_cast<size_t>(fs * 0.05)) * FDN_ORDER * SERIAL_APF_STAGES;
 
         memoryPool.allocate(totalMemoryNeeded);
 
         int mask = 0;
         float* ptr = nullptr;
+
+        // ★ PreDelay (max 500ms)
+        ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.5), mask);
+        preDelayLine.init(ptr, mask);
 
         ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 1.0), mask);
         erDelay.init(ptr, mask);
@@ -83,8 +94,10 @@ namespace FDNReverb {
         for (int i = 0; i < FDN_ORDER; ++i) {
             ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.5), mask);
             fdnDelays[i].init(ptr, mask);
-            ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.1), mask);
-            nestedAllpassDelays[i].init(ptr, mask);
+            for (int s = 0; s < SERIAL_APF_STAGES; ++s) {
+                ptr = memoryPool.requestMemory(static_cast<size_t>(fs * 0.05), mask);
+                nestedAllpassDelays[i][s].init(ptr, mask);
+            }
         }
 
         acousticMetrics.prepare(sampleRate, 2000.0f);
@@ -97,6 +110,15 @@ namespace FDNReverb {
         duckingAttackCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.010f));
         duckingReleaseCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.200f));
         duckingEnvelope = 0.0f;
+
+        // ★ DCブロッカー係数: fc ≈ 5Hz の1次HPF
+        dcBlockerCoeff = 1.0f - (6.28318530718f * 5.0f / static_cast<float>(fs));
+        dcX1.fill(0.0f);
+        dcY1.fill(0.0f);
+
+        // ★ Soft-kneeコンプ: RMSエンベロープ係数 (~3ms窓)
+        fdnRmsEnv.fill(0.0f);
+        rmsCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * 0.003f));
 
         reset();
     }
@@ -118,6 +140,10 @@ namespace FDNReverb {
         outputLimiter.reset();
         outputEQ.reset();
         duckingEnvelope = 0.0f;
+        dcX1.fill(0.0f);
+        dcY1.fill(0.0f);
+        fdnRmsEnv.fill(0.0f);
+        for (auto& dl : fdnDelays) dl.resetState();  // ★ Thiran allpass状態リセット
         for (auto& lfo : lfos) lfo.smoothed = 0.0f;
     }
 
@@ -136,6 +162,9 @@ namespace FDNReverb {
         const float relMs = juce::jmax(0.1f, p.duckingRelMs);
         duckingAttackCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * attMs * 0.001f));
         duckingReleaseCoeff = 1.0f - std::exp(-1.0f / (static_cast<float>(fs) * relMs * 0.001f));
+
+        // ★ PreDelay: ms → サンプル数に変換
+        preDelaySamples = p.preDelayMs * 0.001f * static_cast<float>(fs);
 
         outputEQ.setLoCutHz(p.loCutHz);
         outputEQ.setHiCutHz(p.hiCutHz);
@@ -253,6 +282,31 @@ namespace FDNReverb {
             rt60Mid += effectiveRT60[b];
         rt60Mid = std::max(0.1f, rt60Mid / 6.0f);
 
+        // ─────────────────────────────────────────────────────────────────────────
+        //  ★ 金属音対策 (1): Decay依存マイクロサチュレーション
+        // ─────────────────────────────────────────────────────────────────────────
+        //  FDN ループ内の processMicroSaturation() は、短い残響では温かみを加えるが、
+        //  長い残響では非線形歪みが多数回蓄積し、コムフィルタ構造の共鳴周波数を
+        //  強調して金属的なキーン音を引き起こす。
+        //
+        //  対策: RT60 中域平均が 2.0s 以下なら従来通り適用、2.0s〜6.0s で漸減、
+        //        6.0s 以上で完全バイパス。
+        // ─────────────────────────────────────────────────────────────────────────
+        microSatBlend = juce::jlimit(0.0f, 1.0f, 1.0f - (rt60Mid - 2.0f) / 4.0f);
+
+        // ─────────────────────────────────────────────────────────────────────────
+        //  ★ 金属音対策 (2): Decay依存モジュレーション深さスケーリング
+        // ─────────────────────────────────────────────────────────────────────────
+        //  長い残響ほど、コムフィルタのピークをぼかすために深いモジュレーションが必要。
+        //  Lexicon / Strymon 等の高品位リバーブの標準手法。
+        //
+        //  ★ モジュレーション深さスケーリング（抑制版）
+        //  RT60 ≤ 1.0s → 1.0x (変化なし)
+        //  RT60 = 3.0s → 2.0x
+        //  RT60 ≥ 5.0s → 3.0x (上限)
+        // ─────────────────────────────────────────────────────────────────────────
+        modDepthScale = 1.0f + juce::jlimit(0.0f, 2.0f, (rt60Mid - 1.0f) * 0.5f);
+
         constexpr float baseDB = 16.0f;
         float decayCompDB = 7.0f * std::log10(rt60Mid);
 
@@ -352,7 +406,14 @@ namespace FDNReverb {
         float* outL, float* outR,
         int numSamples) noexcept
     {
-        const float depthSamples = activeParams.modAmount * 0.002f * static_cast<float>(fs);
+        // ★ CPU最適化: fs を float にキャッシュ（processBlock 全域で使用）
+        const float fsf = static_cast<float>(fs);
+
+        // ★ モジュレーション深さ: 二乗カーブ + ベース係数抑制
+        //   modAmount² でノブ低域を緩やかに、0.001f で全体深さを半減
+        //   旧: modAmt=0.5 → 48smp(1ms) / 新: modAmt=0.5 → 12smp(0.25ms)
+        const float modAmtCurved = activeParams.modAmount * activeParams.modAmount;
+        const float depthSamples = modAmtCurved * 0.001f * fsf * modDepthScale;
         const float wetGain = juce::Decibels::decibelsToGain(activeParams.wetDB);
         const float stereoWidth = activeParams.stereoWidth;
         const float erLevel = activeParams.erLevel;
@@ -368,14 +429,48 @@ namespace FDNReverb {
         const float sideBoost = stereoWidth * 1.5f;
         const float erLeakage = (1.0f - stereoWidth) * 0.7f;
 
+        // ★ CPU最適化: apfGainStage はループ不変 → 事前計算
+        const float apfGainStage = effectiveApfGain * 0.78f;
+
+        // ★ CPU最適化: freqModScale を事前計算（16ch分）
+        std::array<float, FDN_ORDER> freqModScales;
+        constexpr float invFdnM1 = 1.0f / static_cast<float>(FDN_ORDER - 1);
+        for (int i = 0; i < FDN_ORDER; ++i)
+            freqModScales[i] = 0.5f + (1.0f - static_cast<float>(i) * invFdnM1) * 1.0f;
+
+        // ★ CPU最適化: 入力ディフューザのディレイ時間を事前計算
+        std::array<float, 4> diffuserDelaySmp;
+        for (int i = 0; i < 4; ++i)
+            diffuserDelaySmp[i] = (3.0f + i * 2.0f) * 0.001f * fsf;
+
+        // ★ CPU最適化: Allpassベースディレイを事前計算（16ch × 3段）
+        constexpr float apfBaseMs[SERIAL_APF_STAGES]   = { 1.5f, 2.3f, 3.7f };
+        constexpr float apfSpreadMs[SERIAL_APF_STAGES] = { 0.30f, 0.37f, 0.47f };
+        constexpr float apfModFrac[SERIAL_APF_STAGES]  = { 0.15f, 0.10f, 0.07f };
+        const float msToSmp = 0.001f * fsf;
+        std::array<std::array<float, SERIAL_APF_STAGES>, FDN_ORDER> apfBaseDelaySmp;
+        for (int i = 0; i < FDN_ORDER; ++i)
+            for (int s = 0; s < SERIAL_APF_STAGES; ++s)
+                apfBaseDelaySmp[i][s] = (apfBaseMs[s] + i * apfSpreadMs[s]) * msToSmp;
+
+        // ★ CPU最適化: ER tapGain の * 0.5f を事前計算
+        std::array<float, MAX_ER_TAPS> erTapGainsHalf;
+        for (int t = 0; t < currentERTapCount; ++t)
+            erTapGainsHalf[t] = currentERGains[t] * 0.5f;
+
+        // ★ CPU最適化: soft-knee 閾値の二乗を事前計算（sqrt 回避）
+        constexpr float compThresh = 0.35f;
+        constexpr float compThreshSq = compThresh * compThresh;
+
         std::array<float, FDN_ORDER> lfoCoeffs;
         {
-            const float fsf = static_cast<float>(fs);
             constexpr float twoPi = 6.28318530718f;
             for (int i = 0; i < FDN_ORDER; ++i) {
                 const float fc = activeParams.modRate * lfos[i].rateMultiplier;
                 lfoCoeffs[i] = juce::jlimit(0.0001f, 0.9999f,
                     1.0f - std::exp(-twoPi * fc / fsf));
+                // ★ コーラスLFOレート更新
+                chorusLFOs[i].phaseInc = activeParams.modRate * chorusLFOs[i].rateScale / fsf;
             }
         }
 
@@ -385,6 +480,15 @@ namespace FDNReverb {
             const float midIn = (leftIn + rightIn) * 0.5f;
             const float sideIn = (leftIn - rightIn) * 0.5f;
             float erOutL = 0.0f, erOutR = 0.0f;
+
+            // ★ PreDelay: 原音とリバーブの時間的分離
+            //   ER・FDN 両方の入力をプリディレイで遅延させる。
+            //   これにより原音のアタック直後にリバーブが始まらず、
+            //   ミックスの明瞭度 (D50/C50) が大幅に向上する。
+            preDelayLine.write(midIn);
+            const float delayedMid = (preDelaySamples > 0.5f)
+                ? preDelayLine.read(preDelaySamples)
+                : midIn;
 
             const float inputPeak = juce::jmax(std::abs(leftIn), std::abs(rightIn));
             const float envCoeff = (inputPeak > duckingEnvelope)
@@ -399,11 +503,10 @@ namespace FDNReverb {
                 duckGainLinear = juce::Decibels::decibelsToGain(gainRedDB);
             }
 
-            float fdnInputMid = midIn;
+            float fdnInputMid = delayedMid;
             if (!bypassInputDiffusers) {
                 for (int i = 0; i < 4; ++i) {
-                    float delaySmp = (3.0f + i * 2.0f) * 0.001f * static_cast<float>(fs);
-                    float d = inputDiffusers[i].read(delaySmp);
+                    float d = inputDiffusers[i].read(diffuserDelaySmp[i]);
                     float w = fdnInputMid + diffuserGain * d;
                     inputDiffusers[i].write(w);
                     fdnInputMid = d - diffuserGain * w;
@@ -411,22 +514,31 @@ namespace FDNReverb {
             }
 
             if (!bypassER) {
-                erDelay.write(midIn);
+                erDelay.write(delayedMid);
                 float erTotalL = 0.0f, erTotalR = 0.0f;
                 for (int t = 0; t < currentERTapCount; ++t) {
-                    float tapValue = erDelay.read(currentERDelaySamples[t]);
-                    float tapGain = currentERGains[t] * 0.5f;
+                    const float tapValue = erDelay.read(currentERDelaySamples[t]);
+                    const float tapGain = erTapGainsHalf[t];
+                    const float tg = tapValue * tapGain;
+                    const float tgLeak = tg * erLeakage;
                     if (t % 2 == 0) {
-                        erTotalL += tapValue * tapGain;
-                        erTotalR += tapValue * tapGain * erLeakage;
+                        erTotalL += tg;
+                        erTotalR += tgLeak;
                     }
                     else {
-                        erTotalR += tapValue * tapGain;
-                        erTotalL += tapValue * tapGain * erLeakage;
+                        erTotalR += tg;
+                        erTotalL += tgLeak;
                     }
                 }
                 erOutL = erTotalL;
                 erOutR = erTotalR;
+            }
+
+            // ★ ER→Late遷移スムージング: ER出力をFDN入力にフィード
+            //   実空間では初期反射が壁面で反射を繰り返しLate Reverbを生成する。
+            //   この自然な遷移を模擬し、ERとLateの境界を滑らかにする。
+            if (!bypassER) {
+                fdnInputMid += (erOutL + erOutR) * 0.5f * 0.15f;
             }
 
             std::array<float, 16> currentFb = fbVec;
@@ -438,7 +550,16 @@ namespace FDNReverb {
 
             for (int i = 0; i < FDN_ORDER; ++i) {
                 const float lfoVal = lfos[i].tick(lfoCoeffs[i]);
-                const float delaySmp = fdnBaseDelaySamples[i] + lfoVal * depthSamples;
+                // ★ コーラス型ピッチモジュレーション: 正弦波LFOをノイズLFOに加算
+                //   ノイズ = ランダムな揺らぎ（金属音抑制）
+                //   コーラス = 滑らかなピッチシフト蓄積（リッチなテール）
+                const float chorusVal = chorusLFOs[i].tick();
+                const float combinedLfo = lfoVal + chorusVal * 0.6f;
+
+                // ★ 周波数依存モジュレーション: 高域チャンネルを深く、低域を浅く
+                const float freqModScale = freqModScales[i];
+                const float delaySmp = fdnBaseDelaySamples[i]
+                    + combinedLfo * depthSamples * freqModScale;
                 float d = fdnDelays[i].read(delaySmp);
 
 #if AMBIENCE_USE_STAGE2_ABSORPTION
@@ -448,13 +569,51 @@ namespace FDNReverb {
                 d = absorptionFilters[i].tick(d, currentAbsorptionCoeffs[i]);
 #endif
 
-                d = processMicroSaturation(d);
+                // ★ 金属音対策 (3): DCブロッカー (1次HPF, fc≈5Hz)
+                //   FDNループ内で吸収フィルタやマイクロサチュレーションが生成する
+                //   DC成分の蓄積を防止。蓄積DCは低域のうなりや非対称歪みの原因になる。
+                {
+                    const float dcIn = d;
+                    const float dcOut = dcIn - dcX1[i] + dcBlockerCoeff * dcY1[i];
+                    dcX1[i] = dcIn;
+                    dcY1[i] = dcOut;
+                    d = dcOut;
+                }
 
-                const float apfDelaySmp = (1.5f + i * 0.3f) * 0.001f * static_cast<float>(fs);
-                float apfD = nestedAllpassDelays[i].read(apfDelaySmp);
-                float apfW = d + effectiveApfGain * apfD;
-                nestedAllpassDelays[i].write(apfW);
-                float apfOut = apfD - effectiveApfGain * apfW;
+                // ★ Soft-kneeコンプレッション (FDNフィードバックループ)
+                //   RMSエンベロープでレベルを追従し、閾値超過分をソフトに圧縮。
+                //   ★ CPU最適化: sqrt を閾値超過時のみ実行（二乗比較でゲート）
+                {
+                    fdnRmsEnv[i] += (d * d - fdnRmsEnv[i]) * rmsCoeff;
+                    if (fdnRmsEnv[i] > compThreshSq) {
+                        const float env = std::sqrt(fdnRmsEnv[i]);
+                        const float over = env - compThresh;
+                        d *= compThresh / (compThresh + over * 0.65f);
+                    }
+                }
+
+                // ★ 金属音対策 (1): Decay依存マイクロサチュレーション
+                //   microSatBlend=1.0 → 従来通り適用 (短残響)
+                //   microSatBlend=0.0 → 完全バイパス (長残響)
+                if (microSatBlend > 0.001f) {
+                    const float sat = processMicroSaturation(d);
+                    d = d + (sat - d) * microSatBlend;
+                }
+
+                // ★ 3段シリアルAllpassチェーン (レイトフィールド密度改善)
+                //   ★ CPU最適化: ベースディレイ・apfGainStage を事前計算済み
+                float apfOut = d;
+                {
+                    for (int s = 0; s < SERIAL_APF_STAGES; ++s) {
+                        const float apfModDepth = depthSamples * apfModFrac[s];
+                        const float apfDelaySmp = apfBaseDelaySmp[i][s]
+                            + combinedLfo * apfModDepth * freqModScale;
+                        float apfD = nestedAllpassDelays[i][s].read(apfDelaySmp);
+                        float apfW = apfOut + apfGainStage * apfD;
+                        nestedAllpassDelays[i][s].write(apfW);
+                        apfOut = apfD - apfGainStage * apfW;
+                    }
+                }
 
                 nextFb[i] = apfOut;
 

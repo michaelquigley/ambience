@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Ambience VERSION 1.0.0 LANGUAGES C CXX)
+project(Ambience VERSION 1.1.0 LANGUAGES C CXX)
 # ============================================================================
 # C++20
 # ============================================================================
@@ -49,7 +49,7 @@ juce_add_plugin(Ambience
     PLUGIN_CODE             "Ambi"
     FORMATS                 VST3 Standalone
     PRODUCT_NAME            "Ambience"
-    PLUGIN_DESCRIPTION      "8-channel FDN Algorithmic Reverb"
+    PLUGIN_DESCRIPTION      "16-channel FDN Algorithmic Reverb"
     IS_SYNTH                FALSE
     NEEDS_MIDI_INPUT        FALSE
     NEEDS_MIDI_OUTPUT       FALSE
@@ -57,7 +57,7 @@ juce_add_plugin(Ambience
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     VST3_AUTO_MANIFEST      FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE
-    VERSION                 "1.0.0"
+    VERSION                 "1.1.0"
 )
 # ============================================================================
 # ソース（存在するファイルのみ）
@@ -140,7 +140,7 @@ target_compile_definitions(Ambience PRIVATE
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
-    AMBIENCE_VERSION="1.0.0"
+    AMBIENCE_VERSION="1.1.0"
 )
 # ============================================================================
 # MSVC コンパイルオプション

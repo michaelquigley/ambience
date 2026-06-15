@@ -155,6 +155,10 @@ bool PresetManager::loadPreset(const juce::String& name)
         if (dryParam != nullptr) dryParam->setValueNotifyingHost(dry01);
     }
 
+    // ★ プリセットロード後は常に通常画面（Normal Mode）に戻す (upstream v1.1.0)
+    if (auto* param = processor.apvts.getParameter("promode"))
+        param->setValueNotifyingHost(0.0f);
+
     currentPresetName = name;
     if (onPresetLoaded) onPresetLoaded(name);
     return true;
